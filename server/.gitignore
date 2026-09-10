@@ -1,0 +1,9 @@
+node_modules/
+dist/
+var/print-jobs/*.txt
+prisma/dev.db
+prisma/dev.db-journal
+.env.local
+.build-tools/
+public/
+prisma/template.db

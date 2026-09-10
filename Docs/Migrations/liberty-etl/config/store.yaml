@@ -1,0 +1,63 @@
+# Teabox setup/migration config for Hidden Treasures Upscale Resale & Consignment.
+#
+# scripts/migrate.ts reads this file to decide the shop's identity (name/location, as
+# given by the owner rather than whatever free-text ended up in Liberty's own STORE
+# table) and which real logins to create. This replaces the demo-data path
+# (server/prisma/seed.ts) entirely for this shop — no demo accounts are created.
+#
+# Every Teabox role (server/src/lib/enums.ts ROLES) has a slot under `roles:` below,
+# even the ones left empty. Staff roles (SYSTEM_ADMIN/OWNER/MANAGER/EMPLOYEE/REGISTER)
+# take a list of {name, email, password} — each becomes a new User + UserRole at the
+# store. Account-scoped roles (CONSIGNOR/VENDOR/DONOR/BOOTH_OWNER) additionally
+# require an `account:` field that must exactly match the `name` of an Account
+# already migrated from Liberty (or created by hand) — this grants that person a
+# login tied to their own account, matching Teabox's account-linked-intake rule (see
+# root CLAUDE.md).
+#
+# `password` is REQUIRED for every entry (owner included) and is used as-is (bcrypt
+# gets applied at write time, same as any other login) — nothing is auto-generated.
+# This trades a plaintext password sitting in this file for not needing an
+# out-of-band handoff step per login; that's a deliberate simplification for a small
+# shop with no legal data-security or reporting requirements to avoid it (per the
+# 2026-09-07 decision — see ../README.md and the migration spec §7.2). Restrict who
+# can read this file accordingly, and change these passwords immediately after
+# migrating if that tradeoff doesn't hold for a given deployment.
+
+store:
+  name: "Hidden Treasures Upscale Resale & Consignment"
+  location: "104 W Harrison St., Kirksville, MO 63501"
+
+# The real shop owner — always granted OWNER, independent of the roles.OWNER list
+# below (which is only for any *additional* owner-level logins beyond Sherry).
+owner:
+  name: "Sherry Stacey"
+  email: "htreasures7@sbcglobal.net"
+  password: "UzxEJa0_M0Wi"
+
+roles:
+  SYSTEM_ADMIN: []
+  OWNER: []
+  MANAGER: []
+  # Matched against Liberty CLIENT rows by name (Samantha Gerena/Jessica Hodges/Amber
+  # Parsons/Kennidy Askew all exist there as ordinary, fee-waived CLIENT_TYPE_ID=1
+  # accounts — no email on file for any of them, hence the firstname@ fallback below).
+  # Emma McGlumpfry has NO matching Liberty account (checked exact and fuzzy
+  # name/last-name variants) — included on name alone, not backed by a source record
+  # like the other four; worth double-checking the spelling.
+  EMPLOYEE:
+    - { name: "Samantha Gerena", email: "samantha@hiddentreasures.com", password: "ChangeMe!123" }
+    - { name: "Jessica Hodges", email: "jessica@hiddentreasures.com", password: "ChangeMe!123" }
+    - { name: "Amber Parsons", email: "amber@hiddentreasures.com", password: "ChangeMe!123" }
+    - { name: "Emma McGlumpfry", email: "emma@hiddentreasures.com", password: "ChangeMe!123" }
+    - { name: "Kennidy Askew", email: "kennidy@hiddentreasures.com", password: "ChangeMe!123" }
+  REGISTER: []
+
+  # Hidden Treasures has no consignor/vendor/booth-owner logins today — it's a
+  # single-operator shop with Sherry as the only real login (confirmed against the
+  # live Liberty database, see ../../sql_server_data_model_migration_spec.md §3.1).
+  # Left empty on purpose; fill in {name, email, password, account} entries if that
+  # changes.
+  CONSIGNOR: []
+  VENDOR: []
+  DONOR: []
+  BOOTH_OWNER: []

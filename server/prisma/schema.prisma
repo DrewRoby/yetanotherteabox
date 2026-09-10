@@ -1,0 +1,224 @@
+// Teabox ERP data model.
+//
+// NOTE: datasource is SQLite for zero-setup local/offline operation (this doubles as
+// the "offline fallback engine" described in backend_structure_document.md). To point
+// at Postgres for a shared/cloud deployment, change `provider` below to "postgresql"
+// and set DATABASE_URL to a postgres connection string — no other schema changes
+// needed.
+//
+// SQLite has no native enum type, so Role/AccountType/ItemStatus/PayoutStatus are
+// plain strings here, validated against the TS union types + zod schemas in
+// src/lib/enums.ts at every write.
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider      = "prisma-client-js"
+  // "native" covers this dev machine's own engine (Linux); "windows" is added so
+  // `npx prisma generate` also fetches the Windows query engine binary, which
+  // server/scripts/build-windows.sh's pkg build bundles for the Windows test-deploy
+  // executable. See root CLAUDE.md's packaging section.
+  binaryTargets = ["native", "windows"]
+}
+
+model Store {
+  id        String   @id @default(cuid())
+  name      String
+  location  String?
+  createdAt DateTime @default(now())
+
+  users     UserRole[]
+  accounts  Account[]
+  items     Item[]
+  devices   Device[]
+  heartbeat Heartbeat?
+}
+
+// Auth identity only. Permissions never derive from this record directly — always
+// from the single active UserRole encoded into the session JWT. See UserRole.
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  roles         UserRole[]
+  itemHistories ItemHistory[]
+  sales         Sale[]
+  auditLogs     AuditLog[]
+}
+
+// One row per role a person holds. A user with rows for both MANAGER and CONSIGNOR
+// can only ever act as one of them per session (see auth.ts / requireRole) — this
+// table exists to grant roles, not to be unioned at authorization time.
+// `role` is one of: SYSTEM_ADMIN, OWNER, MANAGER, EMPLOYEE, REGISTER, CONSIGNOR,
+// VENDOR, DONOR, BOOTH_OWNER (see src/lib/enums.ts ROLES).
+model UserRole {
+  id        String   @id @default(cuid())
+  userId    String
+  role      String
+  storeId   String
+  // Set when the role is account-scoped (CONSIGNOR, VENDOR, DONOR, BOOTH_OWNER):
+  // identifies which Account this grant acts on.
+  accountId String?
+  createdAt DateTime @default(now())
+
+  user    User     @relation(fields: [userId], references: [id])
+  store   Store    @relation(fields: [storeId], references: [id])
+  account Account? @relation(fields: [accountId], references: [id])
+
+  @@unique([userId, role, storeId])
+}
+
+// Polymorphic external/internal party that items and payouts attach to. Consignor,
+// Vendor, Donor, and Booth Owner are all Accounts distinguished by `accountType`;
+// every Store also gets one STORE-type Account representing store-owned inventory, so
+// intake ALWAYS has a target account (see items.route.ts).
+// `accountType` is one of: CONSIGNOR, VENDOR, DONOR, BOOTH_OWNER, STORE.
+model Account {
+  id             String   @id @default(cuid())
+  storeId        String
+  accountType    String
+  name           String
+  email          String?
+  phone          String?
+  paymentMethod  String? // JSON-encoded { method, details }
+  mailingAddress String? // free text, concatenated — same convention as Store.location. No current write path (see server/CLAUDE.md).
+  splitPercent   Int? // consignor/vendor/booth-owner revenue share, e.g. 60
+  currentBalance Float    @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  store     Store      @relation(fields: [storeId], references: [id])
+  userRoles UserRole[]
+  items     Item[]
+  payouts   Payout[]
+
+  @@index([storeId, accountType])
+}
+
+// `status` is one of: PENDING, AVAILABLE, SOLD, DONATED, DISPOSED, RETURNED.
+model Item {
+  id              String   @id @default(cuid())
+  sku             String   @unique
+  description     String
+  category        String
+  subcategory     String?
+  brand           String?
+  style           String?
+  pattern         String?
+  size            String?
+  serialNumber    String?
+  condition       String?
+  consignmentType String? // e.g. "Traditional Consignment", "Buy-Outright", "Booth Rental", "Donation"
+  status          String   @default("AVAILABLE")
+  intakeDate      DateTime @default(now())
+  priceQuickSale  Float?
+  price           Float // "standard" price — the sale price
+  pricePremium    Float?
+  cost            Float? // acquisition cost basis, e.g. for buy-outright/trade items. No current write path (see server/CLAUDE.md).
+  accountId       String
+  storeId         String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  account Account       @relation(fields: [accountId], references: [id])
+  store   Store         @relation(fields: [storeId], references: [id])
+  photos  Photo[]
+  history ItemHistory[]
+  sales   Sale[]
+
+  @@index([storeId, status])
+  @@index([accountId])
+}
+
+model ItemHistory {
+  id          String   @id @default(cuid())
+  itemId      String
+  changeType  String // "INTAKE" | "PRICE_CHANGE" | "STATUS_CHANGE" | "EDIT"
+  oldValue    String?
+  newValue    String?
+  changedById String?
+  activeRole  String?
+  timestamp   DateTime @default(now())
+
+  item      Item  @relation(fields: [itemId], references: [id])
+  changedBy User? @relation(fields: [changedById], references: [id])
+}
+
+model Photo {
+  id        String   @id @default(cuid())
+  itemId    String
+  url       String
+  source    String // "MANUAL" | "CV_STUB"
+  createdAt DateTime @default(now())
+
+  item Item @relation(fields: [itemId], references: [id])
+}
+
+model Sale {
+  id            String   @id @default(cuid())
+  itemId        String
+  salePrice     Float
+  saleDate      DateTime @default(now())
+  paymentType   String // "CASH" | "CARD" | "STORE_CREDIT"
+  registerName  String?
+  processedById String?
+  storeId       String
+
+  item        Item  @relation(fields: [itemId], references: [id])
+  processedBy User? @relation(fields: [processedById], references: [id])
+
+  @@index([storeId, saleDate])
+}
+
+// `status` is one of: REQUESTED, APPROVED, PAID, REJECTED.
+model Payout {
+  id        String    @id @default(cuid())
+  accountId String
+  amount    Float
+  status    String    @default("REQUESTED")
+  createdAt DateTime  @default(now())
+  paidAt    DateTime?
+
+  account Account @relation(fields: [accountId], references: [id])
+}
+
+model Device {
+  id             String   @id @default(cuid())
+  storeId        String
+  name           String
+  type           String // "PRINTER" | "SCANNER" | "CASH_DRAWER" | "PAYMENT_TERMINAL"
+  connectionInfo String? // JSON-encoded
+  status         String   @default("DISCONNECTED")
+  createdAt      DateTime @default(now())
+
+  store Store @relation(fields: [storeId], references: [id])
+}
+
+model Heartbeat {
+  id           String   @id @default(cuid())
+  storeId      String   @unique
+  lastSyncedAt DateTime @default(now())
+
+  store Store @relation(fields: [storeId], references: [id])
+}
+
+// Immutable audit trail. Always records the activeRole a session was using, never
+// just the user, per the security doc's "audit logs capture active role" rule.
+model AuditLog {
+  id            String   @id @default(cuid())
+  entity        String
+  entityId      String
+  action        String
+  performedById String?
+  activeRole    String?
+  timestamp     DateTime @default(now())
+  details       String? // JSON-encoded
+
+  performedBy User? @relation(fields: [performedById], references: [id])
+}

@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx prisma *)",
+      "Read(//tmp/**)",
+      "Bash(python3 -c \"import json;print\\(json.load\\(open\\('manager_token.json'\\)\\)['token']\\)\")",
+      "Bash(curl -s http://localhost:4000/api/accounts?accountType=DONOR -H 'Authorization: Bearer __TRACKED_VAR__')",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -s http://localhost:4000/api/pos/inventory-search?q=Beatles -H 'Authorization: Bearer __TRACKED_VAR__')",
+      "Bash(node -e \"require.resolve\\('playwright'\\)\")",
+      "Bash(npm ls *)",
+      "Bash(timeout 15 curl -sI https://registry.npmjs.org/playwright)",
+      "Bash(npx playwright *)",
+      "Bash(node drive.js)",
+      "Bash(node drive2.js)",
+      "Bash(npx tsc *)",
+      "Bash(node drive-setup.js)",
+      "Bash(lsof -ti:4000 -sTCP:LISTEN)",
+      "Bash(xargs -r kill)",
+      "Bash(cp /tmp/teabox-seeded-backup.db prisma/dev.db)",
+      "Bash(curl -sL https://nodejs.org/dist/v20.18.1/node-v20.18.1-linux-x64.tar.xz -o node20.tar.xz)",
+      "Bash(tar -xf node20.tar.xz)",
+      "Bash(/tmp/node-v20.18.1-linux-x64/bin/node -v)",
+      "Bash(PATH=/tmp/node-v20.18.1-linux-x64/bin:__TRACKED_VAR__ npx pkg --help)",
+      "Bash(npm view *)",
+      "Bash(curl -sL https://nodejs.org/dist/v22.11.0/node-v22.11.0-linux-x64.tar.xz -o node22.tar.xz)",
+      "Bash(tar -xf node22.tar.xz)",
+      "Bash(/tmp/node-v22.11.0-linux-x64/bin/node -v)",
+      "Bash(PATH=/tmp/node-v22.11.0-linux-x64/bin:__TRACKED_VAR__ NODE_OPTIONS=--experimental-require-module npx pkg --help)",
+      "Bash(chmod +x \"/home/crow/code/Consignment Shop System_ Local ERP with Cloud Backup & Network Integration/server/scripts/build-linux.sh\")",
+      "Bash(rm -rf dist)",
+      "Bash(npm run *)",
+      "Bash(rm -f prisma/.template-build.db prisma/.template-build.db-journal)",
+      "Bash(rm -rf ~/.pkg-cache/node/node-v18.20.8*)",
+      "Bash(mkdir -p /tmp/teabox-isolated-test)",
+      "Bash(cp \"/home/crow/code/Consignment Shop System_ Local ERP with Cloud Backup & Network Integration/dist-bin/teabox\" /tmp/teabox-isolated-test/)",
+      "Bash(ls -la /home/crow/code/fetters/db-analysis 2>&1)",
+      "Read(//home/crow/code/fetters/db-analysis/**)"
+    ]
+  }
+}
