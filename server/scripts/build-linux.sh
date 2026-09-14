@@ -15,6 +15,18 @@ SERVER_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ROOT_DIR="$(cd "$SERVER_DIR/.." && pwd)"
 WEB_DIR="$ROOT_DIR/web"
 
+# Path resolution above depends on this file being run as *itself* (so
+# ${BASH_SOURCE[0]} points at its real location) — e.g. `npm run build:linux` from
+# server/, or `bash scripts/build-linux.sh` / `./scripts/build-linux.sh` from repo
+# root. If invoked some other way and it lands on the wrong directory, fail loudly
+# here instead of a confusing "can't find package.json" a few steps downstream.
+if [ ! -f "$SERVER_DIR/package.json" ]; then
+  echo "Resolved SERVER_DIR=$SERVER_DIR but no package.json there — something about how" >&2
+  echo "this script was invoked confused its self-location. Run it as:" >&2
+  echo "  cd server && npm run build:linux" >&2
+  exit 1
+fi
+
 cd "$SERVER_DIR"
 
 echo "==> [1/5] Compiling server TypeScript"

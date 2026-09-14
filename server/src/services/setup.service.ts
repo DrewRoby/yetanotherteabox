@@ -52,3 +52,43 @@ export class SetupAlreadyCompleteError extends Error {
     super("Setup has already been completed for this deployment");
   }
 }
+
+// Optional, opt-in alternative to the manual Setup Wizard: if SETUP_STORE_NAME,
+// SETUP_OWNER_NAME, SETUP_OWNER_EMAIL, and SETUP_OWNER_PASSWORD are all present in
+// the environment (e.g. via config.env on the Windows test-deploy build — see
+// config.env.example), complete setup with them automatically on a fresh (empty)
+// database instead of waiting for someone to fill out the wizard in a browser. Meant
+// for repeatable test deploys where you want the same known owner login every time
+// without re-typing it. A partial set of these vars is almost certainly a typo, not
+// an intentional partial config, so it's logged and skipped rather than guessing.
+export async function maybeAutoCompleteSetup(): Promise<void> {
+  if (!(await needsSetup())) return;
+
+  const storeName = process.env.SETUP_STORE_NAME;
+  const ownerName = process.env.SETUP_OWNER_NAME;
+  const ownerEmail = process.env.SETUP_OWNER_EMAIL;
+  const password = process.env.SETUP_OWNER_PASSWORD;
+  const provided = [storeName, ownerName, ownerEmail, password];
+  if (provided.every((v) => !v)) return; // none set — normal manual-wizard path
+
+  if (provided.some((v) => !v)) {
+    console.warn(
+      "SETUP_STORE_NAME / SETUP_OWNER_NAME / SETUP_OWNER_EMAIL / SETUP_OWNER_PASSWORD must all be " +
+        "set together to auto-complete setup — some are missing, so falling back to the manual Setup Wizard."
+    );
+    return;
+  }
+
+  try {
+    await completeSetup({
+      storeName: storeName!,
+      storeLocation: process.env.SETUP_STORE_LOCATION,
+      ownerName: ownerName!,
+      ownerEmail: ownerEmail!,
+      password: password!,
+    });
+    console.log(`Setup auto-completed from config: store "${storeName}", owner ${ownerEmail}.`);
+  } catch (err) {
+    console.error("Auto-setup from config failed; falling back to the manual Setup Wizard.", err);
+  }
+}

@@ -3,3 +3,4 @@ node_modules/
 xxdetritus/
 *.BAK
 *.db
+*.db-journal

@@ -90,7 +90,11 @@ if (isPackaged) {
     const printJobsDir = path.join(portableDir, "print-jobs");
     fs.mkdirSync(printJobsDir, { recursive: true });
 
-    process.env.DATABASE_URL = `file:${dbPath}`;
+    // Prisma's SQLite connector parses whatever follows "file:" loosely enough that a
+    // Windows absolute path's backslashes and drive-letter colon (`file:C:\Users\...`)
+    // can be misread as part of the URL scheme — forward slashes are the documented-
+    // safe form (`file:C:/Users/...`) and work identically as a filesystem path.
+    process.env.DATABASE_URL = `file:${dbPath.split(path.sep).join("/")}`;
     process.env.TEABOX_PRINT_JOBS_DIR = printJobsDir;
     packagedDbPath = dbPath;
   } else {

@@ -8,6 +8,7 @@ import path from "path";
 import fs from "fs";
 import { exec } from "child_process";
 import { setupRouter } from "./routes/setup.routes";
+import { maybeAutoCompleteSetup } from "./services/setup.service";
 import { authRouter } from "./routes/auth.routes";
 import { accountsRouter } from "./routes/accounts.routes";
 import { itemsRouter } from "./routes/items.routes";
@@ -50,41 +51,52 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 });
 
 const port = Number(process.env.PORT) || 4000;
-const server = app.listen(port, () => {
-  const url = `http://localhost:${port}`;
-  console.log(`Teabox listening on ${url}`);
 
-  // Windows test-deploy target only (see bootstrap.ts): the packaged Linux binary is
-  // opened by install.sh instead, which already does its own health-check-then-open.
-  if (isPackaged && process.platform === "win32") {
-    console.log("");
-    console.log("============================================================");
-    console.log(` Teabox is running at ${url}`);
-    if (packagedDbPath) console.log(` Database file: ${packagedDbPath}`);
-    console.log(
-      packagedConfigPath
-        ? ` Config file:   ${packagedConfigPath}`
-        : " Config file:   none found (using defaults — see config.env.example)"
-    );
-    console.log(" Keep teabox.exe, teabox.db, and config.env together if you move this folder.");
-    console.log("============================================================");
-    console.log("");
-    exec(`start "" "${url}"`, (err) => {
-      if (err) console.log(`Could not auto-open a browser; open ${url} manually.`);
-    });
-  }
-});
+// Wrapped in an async start() so an env-driven auto-setup (see setup.service.ts's
+// maybeAutoCompleteSetup) always finishes before the server accepts its first
+// request — otherwise the SPA's own GET /setup/status could race it and still show
+// the manual wizard on a fresh database.
+async function start() {
+  await maybeAutoCompleteSetup();
 
-// A specific, actionable message for the single most common startup failure — a
-// second copy of Teabox (e.g. a previous attempt that's still running) already
-// holding the port — before the generic uncaughtException handler in bootstrap.ts
-// logs it and holds the window open. Only relevant on the Windows target: on Linux,
-// install.sh's own health-check loop already surfaces "did it actually come up?".
-server.on("error", (err: NodeJS.ErrnoException) => {
-  if (isPackaged && process.platform === "win32" && err.code === "EADDRINUSE") {
-    console.error(`\nPort ${port} is already in use — is another copy of Teabox already running?`);
-    console.error("Check Task Manager for a teabox.exe process and close it, then try again.");
-    console.error("Or set PORT=<a free port, e.g. 4001> in config.env next to teabox.exe.\n");
-  }
-  throw err;
-});
+  const server = app.listen(port, () => {
+    const url = `http://localhost:${port}`;
+    console.log(`Teabox listening on ${url}`);
+
+    // Windows test-deploy target only (see bootstrap.ts): the packaged Linux binary is
+    // opened by install.sh instead, which already does its own health-check-then-open.
+    if (isPackaged && process.platform === "win32") {
+      console.log("");
+      console.log("============================================================");
+      console.log(` Teabox is running at ${url}`);
+      if (packagedDbPath) console.log(` Database file: ${packagedDbPath}`);
+      console.log(
+        packagedConfigPath
+          ? ` Config file:   ${packagedConfigPath}`
+          : " Config file:   none found (using defaults — see config.env.example)"
+      );
+      console.log(" Keep teabox.exe, teabox.db, and config.env together if you move this folder.");
+      console.log("============================================================");
+      console.log("");
+      exec(`start "" "${url}"`, (err) => {
+        if (err) console.log(`Could not auto-open a browser; open ${url} manually.`);
+      });
+    }
+  });
+
+  // A specific, actionable message for the single most common startup failure — a
+  // second copy of Teabox (e.g. a previous attempt that's still running) already
+  // holding the port — before the generic uncaughtException handler in bootstrap.ts
+  // logs it and holds the window open. Only relevant on the Windows target: on Linux,
+  // install.sh's own health-check loop already surfaces "did it actually come up?".
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    if (isPackaged && process.platform === "win32" && err.code === "EADDRINUSE") {
+      console.error(`\nPort ${port} is already in use — is another copy of Teabox already running?`);
+      console.error("Check Task Manager for a teabox.exe process and close it, then try again.");
+      console.error("Or set PORT=<a free port, e.g. 4001> in config.env next to teabox.exe.\n");
+    }
+    throw err;
+  });
+}
+
+start();

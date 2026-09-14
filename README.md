@@ -112,8 +112,12 @@ cd server
 npm run build:windows
 ```
 
-This cross-builds `dist-bin/teabox.exe` from Linux (`@yao-pkg/pkg` just fetches a
-prebuilt Windows Node binary and patches it — it doesn't need to run on Windows).
+This builds `dist-bin/teabox.exe` (`@yao-pkg/pkg` just fetches a prebuilt Windows
+Node binary and patches it, so the *target* is always Windows regardless of where
+you run this). It's most often cross-built from Linux, but `build-windows.sh` also
+runs fine natively on Windows under Git Bash (e.g. for on-site troubleshooting
+without a Linux box handy) — it detects the host OS and fetches the matching
+pkg-runner Node itself; Git for Windows already bundles the `unzip` that step needs.
 Unlike the Linux build's XDG data dir, the Windows build is **portable by design**:
 `teabox.exe` looks for `teabox.db` and an optional `config.env` (see
 `config.env.example` at the repo root) right next to itself, so the exe, its config,

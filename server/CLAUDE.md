@@ -52,6 +52,14 @@ itself into an ungranted role. `GET /me` returns the decoded session + fresh rol
 `CLAUDE.md`). Re-checks `needsSetup` itself and 409s if a store already exists, so a
 stale client can't re-trigger it against a live shop. Creates **no** demo data.
 
+`maybeAutoCompleteSetup()` (same file) is an opt-in alternative to the manual wizard:
+if `SETUP_STORE_NAME`/`SETUP_OWNER_NAME`/`SETUP_OWNER_EMAIL`/`SETUP_OWNER_PASSWORD`
+are all set in the environment (e.g. via `config.env` on the Windows build — see
+`config.env.example`), `index.ts`'s `start()` calls it before `app.listen`, so a
+fresh `teabox.db` gets a known owner login with no browser interaction. No-op once a
+store exists; a partial set of the four vars logs a warning and falls back to the
+wizard rather than guessing.
+
 ## Intake account resolution (`src/services/items.service.ts::resolveIntakeAccountId`)
 
 The load-bearing function for the account-linked-intake requirement:
