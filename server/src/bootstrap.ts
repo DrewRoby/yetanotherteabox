@@ -7,6 +7,7 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
+import crypto from "crypto";
 import { execSync } from "child_process";
 import dotenv from "dotenv";
 import "dotenv/config";
@@ -16,6 +17,30 @@ export const isPackaged = !!(process as unknown as { pkg?: unknown }).pkg;
 // Filled in below when packaged, so index.ts can print/announce them at startup.
 export let packagedDbPath: string | undefined;
 export let packagedConfigPath: string | undefined;
+
+// Every session token is signed with this. The repo (and config.env.example) ship a
+// well-known fallback string for zero-config dev/test-deploy convenience — fine on a
+// laptop only you can reach, but anyone who can read this public repo can forge a
+// valid session for any role against a deployment that's still using it. Rather than
+// hard-failing startup (which would break the documented "short test deploy, no
+// config.env needed" flow), a packaged install that hasn't been given an explicit
+// JWT_SECRET gets a random one generated on first run and persisted next to its
+// database, so the well-known fallback never actually signs a real deployment's
+// tokens. Regenerating/losing this file invalidates all logged-in sessions but
+// nothing else — same blast radius as changing JWT_SECRET by hand.
+function ensurePersistedJwtSecret(dir: string) {
+  if (process.env.JWT_SECRET) return; // explicit config.env / OS env value always wins
+
+  const secretPath = path.join(dir, "jwt-secret");
+  if (fs.existsSync(secretPath)) {
+    process.env.JWT_SECRET = fs.readFileSync(secretPath, "utf8").trim();
+    return;
+  }
+  const secret = crypto.randomBytes(32).toString("hex");
+  fs.writeFileSync(secretPath, secret);
+  process.env.JWT_SECRET = secret;
+  console.log(`First run: generated a session-signing secret at ${secretPath}`);
+}
 
 // Windows-only, and registered before anything else runs: double-clicking teabox.exe
 // (or launching it via install.bat's `start`) opens a console window that Windows
@@ -90,6 +115,8 @@ if (isPackaged) {
     const printJobsDir = path.join(portableDir, "print-jobs");
     fs.mkdirSync(printJobsDir, { recursive: true });
 
+    ensurePersistedJwtSecret(portableDir);
+
     // Prisma's SQLite connector parses whatever follows "file:" loosely enough that a
     // Windows absolute path's backslashes and drive-letter colon (`file:C:\Users\...`)
     // can be misread as part of the URL scheme — forward slashes are the documented-
@@ -106,6 +133,8 @@ if (isPackaged) {
       : path.join(os.homedir(), ".local", "share", "teabox");
     fs.mkdirSync(dataDir, { recursive: true });
     fs.mkdirSync(path.join(dataDir, "print-jobs"), { recursive: true });
+
+    ensurePersistedJwtSecret(dataDir);
 
     const dbPath = path.join(dataDir, "teabox.db");
     if (!fs.existsSync(dbPath)) {

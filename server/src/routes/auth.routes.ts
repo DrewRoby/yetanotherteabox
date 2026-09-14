@@ -1,4 +1,5 @@
 import { Router } from "express";
+import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { authenticate } from "../middleware/auth";
@@ -7,12 +8,26 @@ import { ROLES } from "../lib/enums";
 
 export const authRouter = Router();
 
+// The two credential-adjacent, pre-auth endpoints — nothing stops unlimited password
+// guessing against /login today, and /select-role takes a bare userId with no
+// password, which is guessable enumeration if left unlimited too. Keyed by IP (the
+// library's default), which is enough for a single-shop deployment; a real multi-
+// tenant SaaS would want this keyed by email/userId as well to stop a distributed
+// guess spread across IPs.
+const credentialLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many attempts. Try again later." },
+});
+
 const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
 });
 
-authRouter.post("/login", async (req, res) => {
+authRouter.post("/login", credentialLimiter, async (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
@@ -34,7 +49,7 @@ const selectRoleSchema = z.object({
 
 // Second step of login when a user holds multiple roles — mirrors the login
 // wireframe's role-picker grid. Also reused by /switch-role below.
-authRouter.post("/select-role", async (req, res) => {
+authRouter.post("/select-role", credentialLimiter, async (req, res) => {
   const parsed = selectRoleSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   try {

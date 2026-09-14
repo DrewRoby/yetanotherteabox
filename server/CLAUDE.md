@@ -44,6 +44,15 @@ step) / `POST /switch-role` (authenticated) both re-validate the user actually h
 `(role, storeId)` via `UserRole` before signing a new JWT — a session can never talk
 itself into an ungranted role. `GET /me` returns the decoded session + fresh role list.
 
+`/login` and `/select-role` are both rate-limited (`express-rate-limit`, 20 requests /
+15 min / IP — see `credentialLimiter` in `auth.routes.ts`) since they're the two
+pre-auth, credential-adjacent endpoints. The JWT itself is signed with `JWT_SECRET`
+if set, else (packaged installs only) a random secret `bootstrap.ts` generates on
+first run and persists as a `jwt-secret` file next to the database — never the
+hardcoded fallback string in `lib/jwt.ts`, which only a plain `npm run dev` actually
+uses. See root `CLAUDE.md`'s "Roadmap toward a real commercial deployment" for the
+rest of the hardening pass this came out of (host binding, helmet, CORS).
+
 ## Setup Wizard (`src/routes/setup.routes.ts`, `src/services/setup.service.ts`)
 
 `GET /setup/status` → `{ needsSetup: prisma.store.count() === 0 }`, public. `POST

@@ -4,6 +4,7 @@ import { isPackaged, packagedDbPath, packagedConfigPath } from "./bootstrap";
 
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
 import path from "path";
 import fs from "fs";
 import { exec } from "child_process";
@@ -17,7 +18,25 @@ import { reportsRouter } from "./routes/reports.routes";
 import { settingsRouter } from "./routes/settings.routes";
 
 const app = express();
-app.use(cors({ origin: process.env.CORS_ORIGIN || "http://localhost:5173" }));
+
+// CSP off for now: the default policy needs to be tuned against the built web
+// client's actual script/style sources before it's safe to turn on, and shipping it
+// half-tuned would just break the app. The rest of helmet's defaults (X-Frame-
+// Options, X-Content-Type-Options, etc.) are cheap wins with no such tradeoff.
+app.use(helmet({ contentSecurityPolicy: false }));
+
+// The packaged app serves the built web client from this same origin/port (see the
+// static block below), so production has no cross-origin request to allow in the
+// first place — CORS stays off there unless an operator explicitly opts in via
+// CORS_ORIGIN (e.g. pointing a separate client at this API). Dev's two-process
+// Vite+API setup is the one case that actually needs it.
+const corsOrigin = process.env.CORS_ORIGIN;
+if (corsOrigin) {
+  app.use(cors({ origin: corsOrigin }));
+} else if (!isPackaged) {
+  app.use(cors({ origin: "http://localhost:5173" }));
+}
+
 app.use(express.json({ limit: "5mb" })); // generous limit for base64 intake photos in this stubbed setup
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
@@ -52,6 +71,15 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 
 const port = Number(process.env.PORT) || 4000;
 
+// Node's default bind (no host given) is all interfaces — meaning a fresh install on
+// a shop's network is reachable from any other device on that LAN over plain HTTP by
+// default, with nothing prompting the operator to notice. This app has no TLS story
+// of its own, so loopback-only is the safe default; reaching it from another device
+// (a second register, say) requires explicitly opting in with HOST=0.0.0.0 (or a
+// specific interface) in config.env/the environment, at which point it's on the
+// operator to put a TLS-terminating reverse proxy in front of it.
+const host = process.env.HOST || "127.0.0.1";
+
 // Wrapped in an async start() so an env-driven auto-setup (see setup.service.ts's
 // maybeAutoCompleteSetup) always finishes before the server accepts its first
 // request — otherwise the SPA's own GET /setup/status could race it and still show
@@ -59,9 +87,15 @@ const port = Number(process.env.PORT) || 4000;
 async function start() {
   await maybeAutoCompleteSetup();
 
-  const server = app.listen(port, () => {
+  const server = app.listen(port, host, () => {
     const url = `http://localhost:${port}`;
     console.log(`Teabox listening on ${url}`);
+    if (host !== "127.0.0.1" && host !== "localhost") {
+      console.warn(
+        `\nWARNING: bound to ${host}, reachable from other devices on the network over plain HTTP.\n` +
+          "Put a TLS-terminating reverse proxy in front of this if that's intentional.\n"
+      );
+    }
 
     // Windows test-deploy target only (see bootstrap.ts): the packaged Linux binary is
     // opened by install.sh instead, which already does its own health-check-then-open.

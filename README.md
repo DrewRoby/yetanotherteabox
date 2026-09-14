@@ -7,18 +7,21 @@ repo's planning docs (`project_requirements_document.md`, `tech_stack_document.m
 RBAC, account-linked item intake, a POS inventory search modal, and account-type
 differentiation.
 
-See `/home/crow/.claude/plans/zippy-frolicking-rocket.md` (or ask Claude) for the full
-build plan, including which parts of the original spec (Postgres, Azure/DigitalOcean
-cloud sync, real hardware, Hyperledger, multi-store marketplace) were deliberately
-simplified into stub adapters for this sandboxed build, and why.
+See root `CLAUDE.md` (or ask Claude) for the full build plan, including which parts
+of the original spec (Postgres, Azure/DigitalOcean cloud sync, real hardware,
+Hyperledger, multi-store marketplace) were deliberately simplified into stub
+adapters for this build, and why.
 
 ## Structure
 
 - `server/` — Node.js + Express + TypeScript + Prisma (SQLite) API.
 - `web/` — React + TypeScript + Vite + Tailwind client (Ming Dynasty theme).
 - `wireframes/` — original static HTML mockups the screens were built from.
-- `install.sh` / `dist-bin/` — the packaged Linux executable and its installer (see
-  "Try it as a new shop owner" below).
+- `install.sh` / `dist-bin/teabox` — the packaged Linux executable and its installer
+  (see "Try it as a new shop owner" below).
+- `install.bat` / `dist-bin/teabox.exe` — the packaged Windows x64 executable, for
+  on-site test deploys (see "Windows test-deploy build" below and
+  `Docs/windows-test-deploy-setup.md` for a full first-run/reset walkthrough).
 
 ## Try it as a new shop owner (the executable)
 
@@ -135,6 +138,14 @@ you run it from is where your data lives.
 This target needs `prisma/schema.prisma`'s `generator client` to list `"windows"` in
 `binaryTargets` (already set) so `npx prisma generate`/`npm install` fetches the
 Windows query engine binary alongside the native one.
+
+A fresh `teabox.db` normally lands on the manual Setup Wizard, same as the Linux
+build — but for a repeatable test deploy, `config.env` can also drive setup directly:
+set `SETUP_STORE_NAME`/`SETUP_OWNER_NAME`/`SETUP_OWNER_EMAIL`/`SETUP_OWNER_PASSWORD`
+(see `config.env.example`) and it creates that store/owner on startup with no
+browser interaction. See `Docs/windows-test-deploy-setup.md` for that, plus how to
+fully reset to a first-run state and how to hand-generate a clean database without a
+rebuild.
 
 #### If teabox.exe won't start
 
