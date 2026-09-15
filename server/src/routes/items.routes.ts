@@ -5,9 +5,10 @@ import { authenticate } from "../middleware/auth";
 import { requireRole } from "../middleware/requireRole";
 import { recordAudit } from "../lib/audit";
 import { ITEM_STATUSES } from "../lib/enums";
-import { generateSku, IntakeAccountError, resolveIntakeAccountId } from "../services/items.service";
+import { IntakeAccountError, resolveIntakeAccountId } from "../services/items.service";
 import { printTag } from "../adapters/printer";
 import { suggestMetadata } from "../adapters/cv";
+import { formatBarcode } from "../lib/barcode";
 
 export const itemsRouter = Router();
 itemsRouter.use(authenticate);
@@ -91,40 +92,47 @@ itemsRouter.post("/", async (req, res) => {
     throw err;
   }
 
-  const sku = await generateSku(parsed.data.category);
-  const item = await prisma.item.create({
-    data: {
-      sku,
-      description: parsed.data.description,
-      category: parsed.data.category,
-      subcategory: parsed.data.subcategory,
-      brand: parsed.data.brand,
-      style: parsed.data.style,
-      pattern: parsed.data.pattern,
-      size: parsed.data.size,
-      serialNumber: parsed.data.serialNumber,
-      condition: parsed.data.condition,
-      consignmentType: parsed.data.consignmentType,
-      priceQuickSale: parsed.data.priceQuickSale,
-      price: parsed.data.price,
-      pricePremium: parsed.data.pricePremium,
-      status: "AVAILABLE",
-      accountId,
-      storeId: req.session!.storeId,
-      photos: parsed.data.photoUrl
-        ? { create: [{ url: parsed.data.photoUrl, source: "MANUAL" }] }
-        : undefined,
-      history: {
-        create: [
-          {
-            changeType: "INTAKE",
-            newValue: `Intake at $${parsed.data.price.toFixed(2)}`,
-            changedById: req.session!.sub,
-            activeRole: req.session!.activeRole,
-          },
-        ],
+  // itemNumber + sku are assigned inside the same transaction as the create so two
+  // concurrent intakes for this store can't compute the same number (SQLite
+  // serializes writer transactions, so the count-then-create here is race-free).
+  const storeId = req.session!.storeId;
+  const item = await prisma.$transaction(async (tx) => {
+    const itemNumber = (await tx.item.count({ where: { storeId } })) + 1;
+    return tx.item.create({
+      data: {
+        sku: formatBarcode(storeId, itemNumber),
+        itemNumber,
+        description: parsed.data.description,
+        category: parsed.data.category,
+        subcategory: parsed.data.subcategory,
+        brand: parsed.data.brand,
+        style: parsed.data.style,
+        pattern: parsed.data.pattern,
+        size: parsed.data.size,
+        serialNumber: parsed.data.serialNumber,
+        condition: parsed.data.condition,
+        consignmentType: parsed.data.consignmentType,
+        priceQuickSale: parsed.data.priceQuickSale,
+        price: parsed.data.price,
+        pricePremium: parsed.data.pricePremium,
+        status: "AVAILABLE",
+        accountId,
+        storeId,
+        photos: parsed.data.photoUrl
+          ? { create: [{ url: parsed.data.photoUrl, source: "MANUAL" }] }
+          : undefined,
+        history: {
+          create: [
+            {
+              changeType: "INTAKE",
+              newValue: `Intake at $${parsed.data.price.toFixed(2)}`,
+              changedById: req.session!.sub,
+              activeRole: req.session!.activeRole,
+            },
+          ],
+        },
       },
-    },
+    });
   });
 
   const printResult = await printTag({ sku: item.sku, description: item.description, price: item.price });

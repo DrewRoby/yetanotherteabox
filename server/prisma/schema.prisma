@@ -104,7 +104,8 @@ model Account {
 // `status` is one of: PENDING, AVAILABLE, SOLD, DONATED, DISPOSED, RETURNED.
 model Item {
   id              String   @id @default(cuid())
-  sku             String   @unique
+  sku             String   @unique // barcode value: formatBarcode(storeId, itemNumber) — see src/lib/barcode.ts
+  itemNumber      Int // sequential per store, assigned alongside sku in the same transaction (src/routes/items.routes.ts)
   description     String
   category        String
   subcategory     String?
@@ -132,6 +133,7 @@ model Item {
   history ItemHistory[]
   sales   Sale[]
 
+  @@unique([storeId, itemNumber])
   @@index([storeId, status])
   @@index([accountId])
 }

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import { Badge, Button, Card } from "../components/Card";
+import { Barcode } from "../components/Barcode";
 
 interface ItemDetail {
   id: string;
@@ -44,6 +45,7 @@ export function ItemDetailPage() {
               <label className="text-[10px] uppercase tracking-wide text-gray-500">Item Name</label>
               <h2 className="text-2xl font-bold">{item.description}</h2>
               <div className="text-xs text-crimson font-bold mt-1">SKU: {item.sku}</div>
+              <Barcode value={item.sku} className="mt-2 h-12" />
             </div>
             <div className="bg-crimson2 text-white border border-ink px-4 py-2 text-center">
               <div className="text-[9px] uppercase opacity-80 border-b border-white/30 mb-1">Status</div>

@@ -106,13 +106,57 @@ of an actual decision that would reshape it.
   page-level and get truncated/checkpointed away — not a semantic change log worth
   building on). Scope this as backup/restore, and the deliverable is a **tested
   restore**, not just "backups are being taken."
-- Explicitly not doing: Kafka/streaming CDC or a cloud-Postgres sync target — no
-  multi-consumer or multi-store need exists yet to justify it. `runHeartbeatSync()`
-  in `server/src/adapters/cloudSync.ts` already sketches the right shape if/when
-  logical sync to a cloud DB is actually needed (a periodic app-level outbox push,
-  not log tailing).
+- Explicitly not doing here: Kafka/streaming CDC. This DR backup is per-store and
+  one-way to cold storage — it's independent of, and needed regardless of, the
+  Phase 3 sync direction below.
 
-**Phase 3 — deferred until Phase 0 is fully closed out:** the self-hosted-per-shop
-vs. hosted-SaaS decision. This determines the backup architecture (per-install
-Litestream vs. one managed cloud DB) and how much auditing the existing `storeId`
-scoping needs before it's a real tenant boundary rather than a same-box convenience.
+**Phase 3 — chosen direction (discussed 2026-09-14), not yet built:**
+
+The end goal was never "hosted SaaS." It's a product that keeps running a single
+shop with **no live internet dependency**, plus **cross-store browsing** as an
+intended feature for operators running more than one location. Those two read as
+contradictory (SaaS-style shared visibility vs. offline-first) until split apart:
+
+- *"Must function without internet"* is about **authority** — each store is the sole
+  writer of its own data (intake, POS, payouts, consignor balances), always, whether
+  or not it can reach anything else. This doesn't change at all from today's
+  architecture; `storeId` scoping already does the isolation work.
+- *"Cross-store browsing"* is about **visibility into another store's state**, which
+  can never be truly real-time for a store that's allowed to be offline — no
+  architecture changes that fact. So the only honest version of the feature is "as of
+  the last successful sync," which is not a compromise forced by the offline
+  requirement, it's just what the feature actually means. Once framed that way, the
+  two requirements don't conflict.
+
+Chosen shape — one-way outbox to a dumb cloud aggregator, not a shared live database:
+
+- Every local write appends a row to a per-store, append-only outbox table: entity,
+  op, payload, and a **local monotonic sequence number** (not a timestamp — store
+  machines can't be assumed to agree on clocks, especially after being offline for
+  days). A background job pushes unsent rows whenever connectivity exists.
+- The cloud side only ever ingests; it never pushes writes back down as
+  authoritative. It materializes everyone's outbox into one **read-only** aggregate
+  that any store can query for cross-store browsing when online. It does not need to
+  be always-up for any store's own operations to keep working — if it's down, every
+  store keeps running and cross-store browsing just goes stale until it's back. This
+  is what avoids "SaaS baggage": no uptime SLA on the critical path, no multi-tenant
+  isolation hardening, could be one lightweight box per customer/chain rather than a
+  universal shared platform.
+- Cross-store data is **read-only from every store's perspective** — nobody at Store
+  A ever writes into Store B's data. This is what keeps the whole thing simple: no
+  merge/conflict-resolution logic needed anywhere, which is normally the expensive
+  part of offline-first sync.
+- If browsing needs to keep working while the *browsing* store is itself offline,
+  cache the last successful pull from the aggregate locally — same trick, one hop
+  further down, still read-only so still no merge logic.
+- **Watch for this later**: if browsing ever grows an action like an inter-store
+  transfer ("ship this item from Store B to Store A"), that's two stores' state
+  needing to agree on one fact, which *does* need real coordination (even if it's
+  just a request/accept flow, not a live lock). Decide that deliberately when it's
+  actually requested — don't back into it.
+- `runHeartbeatSync()` in `server/src/adapters/cloudSync.ts` already sketches the
+  right shape for the push side (a periodic app-level push, not log tailing).
+
+This also resolves the self-hosted-vs-SaaS framing from earlier: it's neither — each
+shop stays a self-contained install (today's model, unchanged), with a thin optional
+cloud aggregator layered on top purely for the cross-store read path.

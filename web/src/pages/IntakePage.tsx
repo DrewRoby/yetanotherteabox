@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { Button, Card } from "../components/Card";
+import { Barcode } from "../components/Barcode";
 
 interface AccountOption {
   id: string;
@@ -165,11 +166,15 @@ export function IntakePage() {
           </Card>
           <Card>
             <label className="block text-xs font-bold uppercase mb-2">Barcode / SKU</label>
-            <input
-              disabled
-              placeholder="Assigned automatically on save"
-              className="w-full border-2 border-crimson px-3 py-2 font-mono text-gray-400 bg-gray-50"
-            />
+            {result ? (
+              <Barcode value={result.sku} className="w-full" />
+            ) : (
+              <input
+                disabled
+                placeholder="Assigned automatically on save"
+                className="w-full border-2 border-crimson px-3 py-2 font-mono text-gray-400 bg-gray-50"
+              />
+            )}
           </Card>
         </div>
 

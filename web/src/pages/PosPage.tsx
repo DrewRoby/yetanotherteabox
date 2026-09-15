@@ -1,6 +1,10 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { api, ApiError } from "../api/client";
 import { Button, Card } from "../components/Card";
+
+// Lazy: pulls in the @zxing/browser decoder, which is sizable and only needed once
+// someone actually opens the camera scanner.
+const BarcodeScanner = lazy(() => import("../components/BarcodeScanner").then((m) => ({ default: m.BarcodeScanner })));
 
 interface CartItem {
   itemId: string;
@@ -23,22 +27,27 @@ export function PosPage() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [scanError, setScanError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
   const [saleComplete, setSaleComplete] = useState(false);
 
   const total = cart.reduce((sum, i) => sum + i.price, 0);
 
-  async function handleScan(e: React.FormEvent) {
-    e.preventDefault();
+  async function lookupCode(code: string) {
     setScanError(null);
     try {
       const item = await api.get<{ id: string; sku: string; description: string; price: number; account: { name: string } }>(
-        `/pos/lookup?code=${encodeURIComponent(scanCode)}`
+        `/pos/lookup?code=${encodeURIComponent(code)}`
       );
       addToCart(item);
-      setScanCode("");
     } catch (err) {
       setScanError(err instanceof ApiError ? "No available item with that code." : "Lookup failed.");
     }
+  }
+
+  async function handleScan(e: React.FormEvent) {
+    e.preventDefault();
+    await lookupCode(scanCode);
+    setScanCode("");
   }
 
   function addToCart(item: { id: string; sku: string; description: string; price: number; account: { name: string } }) {
@@ -86,7 +95,10 @@ export function PosPage() {
                 className="w-full border border-ink p-3 focus:border-crimson"
               />
             </form>
-            <div className="flex items-end">
+            <div className="flex items-end gap-2">
+              <Button variant="outline" onClick={() => setCameraOpen(true)}>
+                Scan with Camera
+              </Button>
               <Button variant="secondary" onClick={() => setModalOpen(true)}>
                 Search Inventory
               </Button>
@@ -153,6 +165,12 @@ export function PosPage() {
             setModalOpen(false);
           }}
         />
+      )}
+
+      {cameraOpen && (
+        <Suspense fallback={null}>
+          <BarcodeScanner onClose={() => setCameraOpen(false)} onDetect={(code) => lookupCode(code)} />
+        </Suspense>
       )}
     </div>
   );

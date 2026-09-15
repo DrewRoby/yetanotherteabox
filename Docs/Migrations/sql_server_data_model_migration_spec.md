@@ -1,4 +1,4 @@
-<!-- migration-spec-freshness: schema.prisma=a14745c1 enums.ts=e0ebe3be -->
+<!-- migration-spec-freshness: schema.prisma=31546296 enums.ts=0661a0ed -->
 # Teabox ERP — Data Model Migration Spec (SQL Server source)
 
 Status: **living document**. Update this file whenever the Prisma schema
@@ -449,9 +449,10 @@ Settings → Users & Permissions (`DELETE /settings/users/roles/:userRoleId`).
 | Field | Type | Constraints | Notes |
 |---|---|---|---|
 | `id` | `String` (cuid) | PK | Fresh cuid — but see §7.3 on preserving the source ID for cross-reference. |
-| `sku` | `String` | **unique**, required | If the source system's SKU/tag numbers are themselves unique per shop, reuse them verbatim (better for staff continuity — physical tags already printed with old SKUs stay valid). If the source allows SKU reuse across time (e.g. recycled tag numbers) or the format collides with Teabox's own generator (`generateSku()`, `server/src/services/items.service.ts:39` — 3-letter category prefix + numeric suffix), namespace migrated SKUs distinctly (e.g. a prefix) to guarantee no future auto-generated SKU collides with a migrated one. |
+| `sku` | `String` | **unique**, required | Also the value encoded onto the printed barcode tag (`web/src/components/Barcode.tsx`) and matched on POS scan lookup. If the source system's SKU/tag numbers are themselves unique per shop, reuse them verbatim (better for staff continuity — physical tags already printed with old SKUs stay valid). If the source allows SKU reuse across time (e.g. recycled tag numbers) or the format collides with Teabox's own generator (`formatBarcode()`, `server/src/lib/barcode.ts` — `${storeId}-${itemNumber}`), namespace migrated SKUs distinctly (e.g. a prefix) to guarantee no future auto-generated SKU collides with a migrated one. |
+| `itemNumber` | `Int` | **required**, unique per `storeId` (`@@unique([storeId, itemNumber])`) | Sequential per-store counter `formatBarcode()` encodes into `sku` for *new* items; migrated items don't need it to match their migrated `sku` at all (that's just carried over verbatim), but it still must be populated with some store-unique integer — e.g. a per-store row-number over intake order, the same backfill strategy `prisma/migrations/20260915011122_add_item_number/migration.sql` used for pre-existing rows when this column was added. |
 | `description` | `String` | required | |
-| `category` | `String` | required, free text (no enum) | Feeds `generateSku()`'s 3-letter prefix for *new* items only; migrated items keep their migrated `sku` regardless of what's in this field. |
+| `category` | `String` | required, free text (no enum) | No longer feeds SKU generation (that now comes from `itemNumber`, not `category`); purely descriptive/filterable metadata. |
 | `subcategory`, `brand`, `style`, `pattern`, `size`, `serialNumber`, `condition` | `String?` | all optional free text | Direct 1:1 mapping from whatever equivalent columns the source has; leave `null` rather than empty string for anything absent (the intake `zod` schema treats these as `optional()`, not empty-string-required). |
 | `consignmentType` | `String?` | optional free text, **no current UI surface** | Schema comment (`prisma/schema.prisma:111`) suggests values like `"Traditional Consignment"`, `"Buy-Outright"`, `"Booth Rental"`, `"Donation"` but there is **no enum enforcing this and no web page reads or writes it** (`grep` for `consignmentType` across `web/src` returns nothing) — it's accepted by the intake API (`items.routes.ts`) and stored, but otherwise dark data today. Good place to preserve the source system's original per-item deal-type label even when it doesn't map cleanly onto Teabox's account-type model (e.g. an item under a "60-day markdown consignment" deal distinct from the account's default split). |
 | `status` | `String` | default `"AVAILABLE"`; must be one of `ITEM_STATUSES` | See §5 — **do not default ambiguous source statuses to `AVAILABLE`**; use `PENDING` and let staff triage. |
@@ -584,9 +585,10 @@ code that a bulk SQL load bypasses entirely:
    increment logic backward through migrated `Sale` history — the two should agree,
    and reconciling them is a good migration QA step, but the authoritative value is
    the source system's own current-balance figure at cutover instant.
-6. **No duplicate `sku` values** (DB-level `UNIQUE` will reject the load outright if
-   violated, but resolve source-side duplicates deliberately rather than letting the
-   loader pick one arbitrarily via last-write-wins).
+6. **No duplicate `sku` values**, and **no duplicate `(storeId, itemNumber)` pairs**
+   (both are DB-level `UNIQUE` and will reject the load outright if violated, but
+   resolve source-side duplicates deliberately rather than letting the loader pick one
+   arbitrarily via last-write-wins).
 7. **No duplicate `User.email`** (same — DB-level `UNIQUE`).
 8. **`Item.status` defaults**: for any source item whose sold/available state is
    ambiguous or unknown, load it as `PENDING`, never `AVAILABLE`. `PENDING` is a real,

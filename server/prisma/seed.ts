@@ -108,12 +108,13 @@ async function main() {
     { sku: "CLO-5001", description: "Wool Peacoat - Navy", category: "Clothing", size: "L", price: 78.0, status: "AVAILABLE", accountId: consignorAccount.id, days: 33 },
   ];
 
-  for (const def of itemDefs) {
+  for (const [index, def] of itemDefs.entries()) {
     const intakeDate = new Date();
     intakeDate.setDate(intakeDate.getDate() - def.days);
     const item = await prisma.item.create({
       data: {
         sku: def.sku,
+        itemNumber: index + 1,
         description: def.description,
         category: def.category,
         brand: def.brand,

@@ -36,13 +36,6 @@ export async function resolveIntakeAccountId(
 
 export class IntakeAccountError extends Error {}
 
-export async function generateSku(category: string): Promise<string> {
-  const prefix = category.slice(0, 3).toUpperCase().padEnd(3, "X");
-  const count = await prisma.item.count();
-  const suffix = (1000 + count + Math.floor(Math.random() * 89)).toString();
-  return `${prefix}-${suffix}`;
-}
-
 export async function ensureStoreAccountSeeded(storeId: string) {
   return getOrCreateStoreAccount(storeId);
 }
