@@ -17,6 +17,15 @@ interface CvSuggestion {
   confidence: number;
 }
 
+interface QueuedTicket {
+  itemId: string;
+  sku: string;
+  description: string;
+  category: string;
+  size: string;
+  price: number;
+}
+
 const ACCOUNT_SCOPED_ROLES = ["CONSIGNOR", "BOOTH_OWNER"];
 
 export function IntakePage() {
@@ -31,12 +40,18 @@ export function IntakePage() {
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState("");
   const [brand, setBrand] = useState("");
+  const [size, setSize] = useState("");
   const [price, setPrice] = useState("");
   const [suggestion, setSuggestion] = useState<CvSuggestion | null>(null);
   const [capturing, setCapturing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState<{ sku: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const [batch, setBatch] = useState<QueuedTicket[]>([]);
+  const [printing, setPrinting] = useState(false);
+  const [printError, setPrintError] = useState<string | null>(null);
+  const [printedCount, setPrintedCount] = useState<number | null>(null);
 
   useEffect(() => {
     if (!user) return;
@@ -67,23 +82,59 @@ export function IntakePage() {
     setError(null);
     setSaving(true);
     try {
-      const res = await api.post<{ item: { sku: string } }>("/items", {
-        description,
-        category,
-        brand: brand || undefined,
-        price: Number(price),
-        accountId: isAccountScoped ? undefined : selectedAccountId,
-      });
+      const res = await api.post<{ item: { id: string; sku: string; description: string; category: string; size: string | null; price: number } }>(
+        "/items",
+        {
+          description,
+          category,
+          brand: brand || undefined,
+          size: size || undefined,
+          price: Number(price),
+          accountId: isAccountScoped ? undefined : selectedAccountId,
+        }
+      );
       setResult({ sku: res.item.sku });
+      setBatch((b) => [
+        ...b,
+        {
+          itemId: res.item.id,
+          sku: res.item.sku,
+          description: res.item.description,
+          category: res.item.category,
+          size: res.item.size || "",
+          price: res.item.price,
+        },
+      ]);
+      setPrintedCount(null);
       setDescription("");
       setCategory("");
       setBrand("");
+      setSize("");
       setPrice("");
       setSuggestion(null);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not save item.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  function removeFromBatch(itemId: string) {
+    setBatch((b) => b.filter((t) => t.itemId !== itemId));
+  }
+
+  async function handlePrintBatch() {
+    if (batch.length === 0) return;
+    setPrintError(null);
+    setPrinting(true);
+    try {
+      await api.post("/items/print-batch", { itemIds: batch.map((t) => t.itemId) });
+      setPrintedCount(batch.length);
+      setBatch([]);
+    } catch (err) {
+      setPrintError(err instanceof ApiError ? err.message : "Could not send tags to the printer.");
+    } finally {
+      setPrinting(false);
     }
   }
 
@@ -96,7 +147,7 @@ export function IntakePage() {
             Discard
           </Button>
           <Button onClick={handleSave} disabled={!accountReady || !description || !category || !price || saving}>
-            {saving ? "Saving…" : "Save & Print"}
+            {saving ? "Saving…" : "Save Item"}
           </Button>
         </div>
       </div>
@@ -133,7 +184,13 @@ export function IntakePage() {
       {result && (
         <Card className="mb-5 bg-white border-crimson">
           <span className="font-bold text-crimson">Saved.</span> Item <span className="font-mono">{result.sku}</span> created and
-          tag sent to printer.
+          queued in the tag batch below.
+        </Card>
+      )}
+      {printedCount != null && (
+        <Card className="mb-5 bg-white border-crimson">
+          <span className="font-bold text-crimson">Printed.</span> Sent {printedCount} tag{printedCount === 1 ? "" : "s"} to the
+          printer.
         </Card>
       )}
       {error && (
@@ -187,14 +244,18 @@ export function IntakePage() {
               className="w-full h-20 border border-ink p-2 bg-gray-50"
               placeholder="Vintage Levi's 501 Denim Jeans, Button Fly..."
             />
-            <div className="grid grid-cols-2 gap-4 mt-4">
+            <div className="grid grid-cols-3 gap-4 mt-4">
               <div>
-                <label className="block text-[10px] font-bold uppercase text-gray-500">Category</label>
+                <label className="block text-[10px] font-bold uppercase text-gray-500">Category / Dept.</label>
                 <input value={category} onChange={(e) => setCategory(e.target.value)} className="w-full border border-ink p-2" />
               </div>
               <div>
                 <label className="block text-[10px] font-bold uppercase text-gray-500">Brand</label>
                 <input value={brand} onChange={(e) => setBrand(e.target.value)} className="w-full border border-ink p-2" />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-gray-500">Size</label>
+                <input value={size} onChange={(e) => setSize(e.target.value)} className="w-full border border-ink p-2" placeholder="e.g. M, 32x30" />
               </div>
             </div>
           </Card>
@@ -211,6 +272,48 @@ export function IntakePage() {
           </Card>
         </div>
       </fieldset>
+
+      <Card className="mt-6">
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-xs uppercase font-bold tracking-wide">
+            Tag Batch {batch.length > 0 && <span className="text-crimson">({batch.length} pending)</span>}
+          </h3>
+          <Button onClick={handlePrintBatch} disabled={batch.length === 0 || printing}>
+            {printing ? "Sending…" : `Print Batch${batch.length > 0 ? ` (${batch.length})` : ""}`}
+          </Button>
+        </div>
+        {printError && <p className="text-crimson text-sm mb-3">{printError}</p>}
+        {batch.length === 0 ? (
+          <p className="text-sm text-gray-400">
+            Saved items are queued here for printing. Enter a batch of items, then print all their tags at once.
+          </p>
+        ) : (
+          <div className="flex flex-wrap gap-4">
+            {batch.map((ticket) => (
+              <TagPreview key={ticket.itemId} ticket={ticket} onRemove={() => removeFromBatch(ticket.itemId)} />
+            ))}
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+function TagPreview({ ticket, onRemove }: { ticket: QueuedTicket; onRemove: () => void }) {
+  const pertinent = [ticket.category, ticket.size ? `Size ${ticket.size}` : null].filter(Boolean).join(" · ");
+  return (
+    <div className="relative w-48 border-2 border-ink bg-white p-3 flex flex-col gap-1">
+      <button
+        onClick={onRemove}
+        title="Remove from batch (won't delete the item)"
+        className="absolute top-1 right-1 text-gray-400 hover:text-crimson text-xs leading-none"
+      >
+        ✕
+      </button>
+      <div className="text-[11px] font-bold uppercase leading-tight pr-3 line-clamp-2">{ticket.description}</div>
+      {pertinent && <div className="text-[10px] text-gray-500 uppercase">{pertinent}</div>}
+      <div className="text-lg font-black text-crimson">${ticket.price.toFixed(2)}</div>
+      <Barcode value={ticket.sku} className="w-full" />
     </div>
   );
 }

@@ -178,11 +178,13 @@ Real: auth/JWT active-role sessions, RBAC enforcement, Prisma/SQLite persistence
 intake→inventory→POS→sale→payout business logic, reports computed from live data, CSV
 export.
 
-Simulated (clearly marked `// STUB` in `server/src/adapters/`): thermal printer
-(writes a rendered ticket to `server/var/print-jobs/` instead of talking ESC/POS to a
-real Epson printer), computer-vision metadata suggestions, outbound email, and cloud
-sync heartbeat. No Hyperledger blockchain or multi-store marketplace backend is
-implemented — Settings' Blockchain tab is a placeholder.
+Simulated (clearly marked `// STUB` in `server/src/adapters/`): the tag/label printer
+(writes each rendered ticket — item name, department/size, price, barcode — to
+`server/var/print-jobs/` instead of talking ZPL or ESC/POS to a real printer; the
+model on hand isn't confirmed yet, so the stub doesn't commit to either protocol),
+computer-vision metadata suggestions, outbound email, and cloud sync heartbeat. No
+Hyperledger blockchain or multi-store marketplace backend is implemented — Settings'
+Blockchain tab is a placeholder.
 
 To point at a real Postgres instance instead of the bundled SQLite file, change the
 `provider` in `server/prisma/schema.prisma`'s `datasource` block and update

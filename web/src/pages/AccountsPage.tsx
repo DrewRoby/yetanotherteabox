@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
+import { useAuth } from "../auth/AuthContext";
 import { Badge, Button, Card } from "../components/Card";
 
 interface AccountRow {
@@ -19,32 +20,57 @@ const TABS = [
   { type: "STORE", label: "Store" },
 ];
 
+const CAN_CREATE_ROLES = ["SYSTEM_ADMIN", "OWNER", "MANAGER"];
+
 export function AccountsPage() {
   const { id } = useParams();
   if (id) return <AccountDetail id={id} />;
 
+  const { user } = useAuth();
   const [tab, setTab] = useState("CONSIGNOR");
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
+  const [addOpen, setAddOpen] = useState(false);
 
-  useEffect(() => {
+  function reload() {
     api.get<AccountRow[]>(`/accounts?accountType=${tab}`).then(setAccounts);
-  }, [tab]);
+  }
+  useEffect(reload, [tab]);
+
+  const canCreate = user ? CAN_CREATE_ROLES.includes(user.activeRole) : false;
 
   return (
     <div className="p-8">
-      <div className="flex gap-2 mb-6 border-b border-ink">
-        {TABS.map((t) => (
-          <button
-            key={t.type}
-            onClick={() => setTab(t.type)}
-            className={`px-4 py-2 text-sm font-bold uppercase border-t border-l border-r border-ink -mb-px ${
-              tab === t.type ? "bg-white" : "bg-bone2 text-gray-500"
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
+      <div className="flex justify-between items-end mb-6 border-b border-ink">
+        <div className="flex gap-2">
+          {TABS.map((t) => (
+            <button
+              key={t.type}
+              onClick={() => setTab(t.type)}
+              className={`px-4 py-2 text-sm font-bold uppercase border-t border-l border-r border-ink -mb-px ${
+                tab === t.type ? "bg-white" : "bg-bone2 text-gray-500"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        {canCreate && tab !== "STORE" && (
+          <Button className="mb-2" onClick={() => setAddOpen(true)}>
+            + Add Account
+          </Button>
+        )}
       </div>
+
+      {addOpen && (
+        <AddAccountModal
+          accountType={tab}
+          onClose={() => setAddOpen(false)}
+          onCreated={() => {
+            setAddOpen(false);
+            reload();
+          }}
+        />
+      )}
 
       {tab === "DONOR" && (
         <p className="text-xs text-gray-500 mb-4">
@@ -191,6 +217,103 @@ function AccountDetail({ id }: { id: string }) {
           </table>
         </>
       )}
+    </div>
+  );
+}
+
+function AddAccountModal({
+  accountType,
+  onClose,
+  onCreated,
+}: {
+  accountType: string;
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [splitPercent, setSplitPercent] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const tabLabel = TABS.find((t) => t.type === accountType)?.label.replace(/s$/, "") ?? accountType;
+  const showsSplit = accountType !== "DONOR";
+
+  async function handleCreate() {
+    setError(null);
+    setSaving(true);
+    try {
+      await api.post("/accounts", {
+        accountType,
+        name,
+        email: email || undefined,
+        phone: phone || undefined,
+        splitPercent: showsSplit && splitPercent ? Number(splitPercent) : undefined,
+      });
+      onCreated();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not create account.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
+      onKeyDown={(e) => e.key === "Escape" && onClose()}
+    >
+      <Card className="w-[420px]">
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="font-bold uppercase text-sm">Add {tabLabel}</h3>
+          <button onClick={onClose} className="text-gray-500 hover:text-crimson">
+            ✕
+          </button>
+        </div>
+        <div className="flex flex-col gap-3">
+          <div>
+            <label className="block text-[10px] font-bold uppercase text-gray-500 mb-1">Name</label>
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="w-full border border-ink p-2"
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] font-bold uppercase text-gray-500 mb-1">Email</label>
+            <input value={email} onChange={(e) => setEmail(e.target.value)} className="w-full border border-ink p-2" />
+          </div>
+          <div>
+            <label className="block text-[10px] font-bold uppercase text-gray-500 mb-1">Phone</label>
+            <input value={phone} onChange={(e) => setPhone(e.target.value)} className="w-full border border-ink p-2" />
+          </div>
+          {showsSplit && (
+            <div>
+              <label className="block text-[10px] font-bold uppercase text-gray-500 mb-1">Split % (their share)</label>
+              <input
+                type="number"
+                min="0"
+                max="100"
+                value={splitPercent}
+                onChange={(e) => setSplitPercent(e.target.value)}
+                placeholder="e.g. 60"
+                className="w-full border border-ink p-2"
+              />
+            </div>
+          )}
+        </div>
+        {error && <p className="text-crimson text-sm mt-3">{error}</p>}
+        <div className="flex justify-end gap-3 mt-5">
+          <Button variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={handleCreate} disabled={!name || saving}>
+            {saving ? "Saving…" : "Create Account"}
+          </Button>
+        </div>
+      </Card>
     </div>
   );
 }

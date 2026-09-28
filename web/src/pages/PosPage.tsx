@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
 import { Button, Card } from "../components/Card";
 
@@ -29,8 +29,36 @@ export function PosPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [saleComplete, setSaleComplete] = useState(false);
+  const scanInputRef = useRef<HTMLInputElement>(null);
 
   const total = cart.reduce((sum, i) => sum + i.price, 0);
+
+  function focusScanInput() {
+    scanInputRef.current?.focus();
+  }
+
+  // A USB HID scanner (e.g. the NetumScan NSA5) is just a keyboard that types the
+  // decoded code + a terminator (Enter, by that device's default) into whatever
+  // element currently has focus — there's no driver or serial protocol involved, so
+  // this plain input is the entire integration. That means focus has to stay pinned
+  // here during normal register use, or a clerk clicking anywhere else on the page
+  // (without deliberately reopening a modal) would swallow the next scan into the
+  // void. Re-focus after every state change that could have moved it, and on any
+  // stray click outside another field/button/modal.
+  useEffect(() => {
+    focusScanInput();
+  }, []);
+
+  useEffect(() => {
+    if (modalOpen || cameraOpen) return;
+    function handleDocumentClick(e: MouseEvent) {
+      const target = e.target as HTMLElement;
+      if (target.closest("input, textarea, select, button, a")) return;
+      focusScanInput();
+    }
+    document.addEventListener("click", handleDocumentClick);
+    return () => document.removeEventListener("click", handleDocumentClick);
+  }, [modalOpen, cameraOpen]);
 
   async function lookupCode(code: string) {
     setScanError(null);
@@ -41,6 +69,8 @@ export function PosPage() {
       addToCart(item);
     } catch (err) {
       setScanError(err instanceof ApiError ? "No available item with that code." : "Lookup failed.");
+    } finally {
+      focusScanInput();
     }
   }
 
@@ -67,6 +97,7 @@ export function PosPage() {
     });
     setCart([]);
     setSaleComplete(true);
+    focusScanInput();
   }
 
   return (
@@ -75,7 +106,13 @@ export function PosPage() {
         <Card className="mb-4 border-crimson">
           <div className="flex justify-between items-center">
             <span className="font-bold text-crimson">Sale complete.</span>
-            <Button variant="outline" onClick={() => setSaleComplete(false)}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setSaleComplete(false);
+                focusScanInput();
+              }}
+            >
               New Sale
             </Button>
           </div>
@@ -88,6 +125,7 @@ export function PosPage() {
             <form onSubmit={handleScan} className="flex-1">
               <label className="block text-[11px] font-bold uppercase text-gray-500 mb-1">Scan Input</label>
               <input
+                ref={scanInputRef}
                 value={scanCode}
                 onChange={(e) => setScanCode(e.target.value)}
                 autoFocus
@@ -159,17 +197,27 @@ export function PosPage() {
 
       {modalOpen && (
         <SearchModal
-          onClose={() => setModalOpen(false)}
+          onClose={() => {
+            setModalOpen(false);
+            focusScanInput();
+          }}
           onSelect={(item) => {
             addToCart(item);
             setModalOpen(false);
+            focusScanInput();
           }}
         />
       )}
 
       {cameraOpen && (
         <Suspense fallback={null}>
-          <BarcodeScanner onClose={() => setCameraOpen(false)} onDetect={(code) => lookupCode(code)} />
+          <BarcodeScanner
+            onClose={() => {
+              setCameraOpen(false);
+              focusScanInput();
+            }}
+            onDetect={(code) => lookupCode(code)}
+          />
         </Suspense>
       )}
     </div>

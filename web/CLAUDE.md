@@ -42,13 +42,58 @@ the two apps — update both if roles change).
 | `/login` | `LoginPage` | none | Handles the multi-role picker step inline. |
 | `/dashboard` | `DashboardPage` | staff | Role-specific widgets from `/reports/dashboard`. |
 | `/inventory`, `/inventory/:id` | `InventoryPage`, `ItemDetailPage` | staff | |
-| `/intake` | `IntakePage` | staff + Consignor/Booth Owner | Locked "Intake For" card vs. required account `<select>` — mirrors `resolveIntakeAccountId` server-side. |
-| `/pos` | `PosPage` | staff + Register | Scan input + "Search Inventory" modal (tagless items) + checkout. |
-| `/accounts`, `/accounts/:id` | `AccountsPage` | staff | Tabbed by `accountType`; Donor tab never renders a balance column. |
+| `/intake` | `IntakePage` | staff + Consignor/Booth Owner | Locked "Intake For" card vs. required account `<select>` — mirrors `resolveIntakeAccountId` server-side. Saving queues a tag into the "Tag Batch" panel instead of printing immediately — see "Ticket printing" below. |
+| `/pos` | `PosPage` | staff + Register | Scan input + "Search Inventory" modal (tagless items) + camera scanner (`components/BarcodeScanner.tsx`, lazy-loaded) + checkout. |
+| `/accounts`, `/accounts/:id` | `AccountsPage` | staff | Tabbed by `accountType`; Donor tab never renders a balance column. "+ Add Account" (Owner/Manager/Admin only, hidden on the Store tab) opens a modal posting to the pre-existing `POST /accounts` — see `server/CLAUDE.md`'s "Accounts" section. |
 | `/portal` | `ConsignorPortalPage` | Consignor/Vendor/Donor | Self-service, own account only (`/accounts/me/profile`). |
 | `/booth-pricing` | `BoothOwnerPricingPage` | Booth Owner (own items) + Manager/Owner (pick a booth) | Inline price edits + bulk % adjustment. |
 | `/reports` | `ReportsPage` | Manager/Owner/Admin | Daily sales, aging, payouts; CSV export via raw `fetch` (blob download, not the JSON api client). |
 | `/settings` | `SettingsPage` | Manager/Owner/Admin | Tabbed; Users & Permissions restricted further to Owner/Admin inside the page. |
+
+## Barcode scanning (`PosPage`'s "Scan Input")
+
+Physical USB barcode scanners (tested against the NetumScan NSA5, an omnidirectional
+desktop scanner) are HID keyboard-emulation devices — no driver, no serial/COM mode.
+Decoding a barcode just "types" the code into whatever element has focus, followed by
+a terminator (Enter/CR by that device's default). That means the plain `<input>` in
+`PosPage` *is* the entire scanner integration; there's no server-side "scanner
+adapter" the way `printer.ts` stubs a real printer, because there's no protocol to
+implement — the OS already presents it as a keyboard.
+
+The only real failure mode is focus: if a clerk clicks elsewhere on the page first,
+the next scan's keystrokes go nowhere. `PosPage` re-focuses the scan input after
+every state change that could have stolen it (cart update, modal close, checkout) and
+on any stray click that isn't on another field/button/modal — see the `focusScanInput`
+calls and the document `click` listener in `PosPage.tsx`.
+
+`components/BarcodeScanner.tsx` (camera-based, via `@zxing/browser`, lazy-loaded) is a
+secondary input path for devices with a camera but no physical scanner attached — not
+a replacement for the HID path above, which is what real registers use.
+
+`components/Barcode.tsx` is the write/render side — renders any `Item.sku` (see
+`server/src/lib/barcode.ts::formatBarcode`) as a real Code128 barcode via `jsbarcode`.
+Used on `IntakePage` (in place of the old disabled "assigned automatically" input,
+once `result.sku` comes back from the save) and on `ItemDetailPage` next to the SKU
+line, so the same tag/barcode that's on the physical item can be reprinted or
+re-scanned for verification.
+
+## Ticket printing (`IntakePage`'s "Tag Batch" panel)
+
+Saving an item no longer prints its tag right away — `handleSave` pushes the newly
+created item (id/sku/description/category/size/price) into a `batch` array instead,
+rendered as a "Tag Batch" `Card` below the intake form. Each queued entry is shown via
+`TagPreview`, a small mock label: description, a "Category · Size" pertinent-info line
+(the department + size fields a clothing tag needs), price, and a real `Barcode` for
+the item's `sku` — meant to look like what the physical tag will actually contain, not
+just a confirmation. A ✕ on each preview removes it from the batch only (the `Item`
+stays saved either way); "Print Batch (N)" posts all queued item IDs to `POST
+/items/print-batch` (see `server/CLAUDE.md`) and clears the batch on success.
+
+This means a clerk can enter several items from one consignor drop-off in a row and
+print all their tags in one trip to the printer, instead of the previous per-item
+auto-print. The "Size" field on the intake form (next to Category/Brand) was added
+specifically to feed this — `Item.size`/`category` already existed in the schema and
+intake route, just weren't exposed in this form before.
 
 ## API client (`src/api/client.ts`)
 

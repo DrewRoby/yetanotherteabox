@@ -32,7 +32,7 @@ no shared package).
 - `UserRole` — `(userId, role, storeId, accountId?)`. One row per role a person holds; a user with both `MANAGER` and `CONSIGNOR` rows still only acts as one per session. `accountId` set for account-scoped roles (Consignor/Vendor/Donor/Booth Owner) — links the grant to the `Account` it acts on.
 - `Store` — one per shop.
 - `Account` — polymorphic party items/payouts attach to: `accountType ∈ {CONSIGNOR, VENDOR, DONOR, BOOTH_OWNER, STORE}`. Every store has exactly one `STORE`-type account (store-owned inventory) so intake always has a target. `serializeAccount()` (`src/services/accounts.service.ts`) strips `currentBalance` from the API response entirely for non-balance-bearing types (Donor, Store) — not just hidden in the UI. `mailingAddress` (free text, like `Store.location`) and `paymentMethod` have **no current write path** — populated only by direct SQL (e.g. a migration), not reachable via any route or UI today.
-- `Item` — `accountId` is **required** (no intake without an account). `status ∈ {PENDING, AVAILABLE, SOLD, DONATED, DISPOSED, RETURNED}`. `cost` (acquisition cost basis) has **no current write path**, same as `consignmentType`.
+- `Item` — `accountId` is **required** (no intake without an account). `status ∈ {PENDING, AVAILABLE, SOLD, DONATED, DISPOSED, RETURNED}`. `cost` (acquisition cost basis) has **no current write path**, same as `consignmentType`. `sku` is also the barcode value (see below) — POS scan lookup, the printed tag, and the web `Barcode` component all key off it. `itemNumber` is a sequential-per-store counter (`@@unique([storeId, itemNumber])`) that `sku` is derived from.
 - `ItemHistory`, `Photo`, `Sale`, `Payout`, `Device`, `Heartbeat` — as named.
 - `AuditLog` — records `activeRole` alongside `performedById`, not just the user (security-doc requirement: interpret actions strictly in the role that performed them).
 
@@ -78,6 +78,58 @@ The load-bearing function for the account-linked-intake requirement:
   `accountId` belonging to the same store (the store's own `STORE` account is valid).
 Every route that creates an `Item` goes through this — don't bypass it.
 
+## Barcode values (`src/lib/barcode.ts`)
+
+`formatBarcode(storeId, itemNumber)` → `` `${storeId}-${itemNumber padded to 6}` ``,
+used as `Item.sku` (also the value rendered as a real Code128 barcode by the web
+`Barcode` component, and what POS scan lookup matches against). `items.routes.ts`'s
+intake handler assigns `itemNumber` and `sku` inside one `prisma.$transaction` (count
+existing items for the store, +1) rather than as a separate step before `create` —
+SQLite serializes writer transactions, so this is race-free without needing a DB
+sequence. This replaced an earlier `generateSku(category)` (3-letter category prefix +
+random suffix); migration `20260915011122_add_item_number` backfilled existing rows'
+`itemNumber` via a per-store `ROW_NUMBER() OVER (PARTITION BY storeId ORDER BY
+intakeDate)` window function when the column was added as non-nullable.
+
+See `web/CLAUDE.md`'s "Barcode scanning" section for the read side — a physical USB
+scanner needs no server-side integration at all (it's a keyboard, not a device with a
+protocol), so there's no `adapters/scanner.ts` alongside `adapters/printer.ts`.
+
+## Ticket printing (`src/adapters/printer.ts`, `POST /items/print-batch`)
+
+Item intake (`POST /items`) no longer prints a tag itself — it only creates the `Item`
+and logs the `INTAKE` history entry. Printing is a separate, explicit step: the web
+`IntakePage` queues each saved item into a "Tag Batch" and calls `POST
+/items/print-batch` once, so a clerk entering several items from one drop-off walks to
+the printer a single time instead of once per item. Don't reintroduce a `printTag`
+call inside the intake handler.
+
+`print-batch` takes `{ itemIds: string[] }`, re-reads those items from the DB (never
+trusts client-supplied ticket text — a tampered price/description can't reach the
+printer that way), and applies the same staff-or-own-account authorization check as
+`GET /:id` — a Consignor/Booth Owner may only print tags for their own items. It calls
+`printTagBatch()`, which loops `printTag()` per item and returns one combined result
+set; one `PRINT_TAG` audit entry is recorded per item.
+
+`TagTicket` (the adapter's input shape) carries `category` and `size` alongside
+`sku`/`description`/`price` so the printed tag can show department + size (the
+"pertinent info" for clothing) under the item name. The exact printer model is still
+unconfirmed — candidates on hand are a Zebra label printer (ZPL) or an Epson receipt
+printer (ESC/POS); `prisma/seed.ts`'s demo `Device` row names a "Zebra ZD410" if that's
+a hint. Since the stub only renders ticket text and writes it to
+`var/print-jobs/<sku>.txt`, it doesn't commit to either protocol — swapping
+`printTag`/`printTagBatch`'s bodies for a real driver shouldn't require touching any
+caller either way.
+
+## Accounts (`src/routes/accounts.routes.ts`)
+
+`GET /` (staff-only) and `POST /` (Owner/Manager/Admin only — `EMPLOYEE` sessions can
+view but not create) predate this feature but had no web entry point until the
+Accounts page's "+ Add Account" modal was added (see `web/CLAUDE.md`'s Pages table).
+`POST /` rejects `accountType: "STORE"` outright (`"STORE accounts are managed
+automatically"`) since every store's `STORE` account is created once, at Setup Wizard
+time — the web only shows the Add button on the other four tabs for that reason.
+
 ## POS (`src/routes/pos.routes.ts`)
 
 `GET /lookup?code=` exact SKU match. `GET /inventory-search?q=&category=&size=&brand=`
@@ -93,10 +145,11 @@ keys — see root `CLAUDE.md`'s gotcha list for why this matters.
 
 ## Adapters (`src/adapters/`) — all stubs, all swappable
 
-`printer.ts` (writes a rendered ESC/POS-style ticket to a print-jobs dir instead of a
-real Epson socket), `cv.ts` (canned brand/category suggestions), `email.ts` (logs
-instead of sending), `cloudSync.ts` (stamps `Heartbeat.lastSyncedAt` locally instead
-of pushing to Azure/DO). Each keeps the interface a real integration would use.
+`printer.ts` (writes rendered tag tickets to a print-jobs dir instead of talking ZPL/
+ESC/POS to a real label printer — see "Ticket printing" above), `cv.ts` (canned brand/
+category suggestions), `email.ts` (logs instead of sending), `cloudSync.ts` (stamps
+`Heartbeat.lastSyncedAt` locally instead of pushing to Azure/DO). Each keeps the
+interface a real integration would use.
 
 ## Packaging (`scripts/build-linux.sh`, see root `CLAUDE.md` for the two gotchas)
 

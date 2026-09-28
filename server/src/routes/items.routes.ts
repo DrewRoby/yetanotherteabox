@@ -6,7 +6,7 @@ import { requireRole } from "../middleware/requireRole";
 import { recordAudit } from "../lib/audit";
 import { ITEM_STATUSES } from "../lib/enums";
 import { IntakeAccountError, resolveIntakeAccountId } from "../services/items.service";
-import { printTag } from "../adapters/printer";
+import { printTagBatch } from "../adapters/printer";
 import { suggestMetadata } from "../adapters/cv";
 import { formatBarcode } from "../lib/barcode";
 
@@ -79,7 +79,10 @@ const intakeSchema = z.object({
 
 // Item Intake. accountId resolution follows resolveIntakeAccountId's rules — see
 // that function for the Consignor/Booth-Owner-vs-staff branch (tasks 825fcb1e,
-// 1a912596, c3ec7969). Always prints a tag and logs an INTAKE history entry.
+// 1a912596, c3ec7969). Logs an INTAKE history entry. Tag printing is deferred to
+// POST /print-batch below — IntakePage queues each saved item into a batch instead
+// of printing one tag at a time, so a clerk entering several items walks to the
+// printer once.
 itemsRouter.post("/", async (req, res) => {
   const parsed = intakeSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
@@ -135,9 +138,44 @@ itemsRouter.post("/", async (req, res) => {
     });
   });
 
-  const printResult = await printTag({ sku: item.sku, description: item.description, price: item.price });
   await recordAudit(req.session!, "Item", item.id, "INTAKE", { accountId, sku: item.sku });
-  res.status(201).json({ item, print: printResult });
+  res.status(201).json({ item });
+});
+
+const printBatchSchema = z.object({ itemIds: z.array(z.string()).min(1) });
+
+// Sends one print job per item to the label printer, called once from IntakePage's
+// "Print Batch" action after a clerk has queued up several intake tickets. Re-reads
+// each item from the DB rather than trusting client-supplied ticket text, so a
+// tampered price/description can't reach the printer — same isAccountScoped-or-staff
+// check as GET /:id, since a Consignor/Booth Owner may only reprint their own items.
+itemsRouter.post("/print-batch", async (req, res) => {
+  const parsed = printBatchSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  const session = req.session!;
+  const items = await prisma.item.findMany({
+    where: { id: { in: parsed.data.itemIds }, storeId: session.storeId },
+  });
+  const isStaff = ["SYSTEM_ADMIN", "OWNER", "MANAGER", "EMPLOYEE"].includes(session.activeRole);
+  const authorized = items.filter((item) => isStaff || session.accountId === item.accountId);
+  if (authorized.length !== parsed.data.itemIds.length) {
+    return res.status(403).json({ error: "Not authorized to print tags for one or more of these items" });
+  }
+
+  const results = await printTagBatch(
+    authorized.map((item) => ({
+      sku: item.sku,
+      description: item.description,
+      price: item.price,
+      category: item.category,
+      size: item.size ?? undefined,
+    }))
+  );
+  for (const item of authorized) {
+    await recordAudit(session, "Item", item.id, "PRINT_TAG", { sku: item.sku });
+  }
+  res.json({ printed: results });
 });
 
 // Computer-vision metadata suggestion stub, called after a photo is captured on the
