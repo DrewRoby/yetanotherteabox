@@ -3,7 +3,8 @@ import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { authenticate } from "../middleware/auth";
-import { beginSession, selectRole, verifyCredentials, loadRoleOptions } from "../services/auth.service";
+import { beginSession, selectRole, verifyCredentials, loadRoleOptions, issueToken } from "../services/auth.service";
+import { resolveBadge } from "../services/badge.service";
 import { ROLES } from "../lib/enums";
 
 export const authRouter = Router();
@@ -39,6 +40,46 @@ authRouter.post("/login", credentialLimiter, async (req, res) => {
     return res.json({ needsRoleSelection: false, token: result.token, activeRole: result.activeRole });
   }
   return res.json({ needsRoleSelection: true, userId: user.id, roles: result.roles });
+});
+
+// Badge scans get their own, looser limiter: the server binds to 127.0.0.1 by
+// default, so every register in a shop can share one IP, and a busy shift of quick
+// badge logins would trip the 20/15min credential limit. Brute force isn't the
+// concern it is for passwords — codes carry 100 random bits (badge.service.ts).
+const badgeLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many attempts. Try again later." },
+});
+
+const badgeLoginSchema = z.object({
+  code: z.string().min(1).max(64),
+  role: z.enum(ROLES).optional(),
+  storeId: z.string().optional(),
+});
+
+// Scan-to-login from a sign-in sheet badge. Mirrors /login's two-step shape, except
+// the role-choice step re-sends the badge code instead of going through
+// /select-role, so the second step still proves possession of the credential. Only
+// BADGE_ROLES are ever offered or accepted — see badge.service.ts.
+authRouter.post("/badge-login", badgeLimiter, async (req, res) => {
+  const parsed = badgeLoginSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  const resolved = await resolveBadge(parsed.data.code);
+  if (!resolved) return res.status(401).json({ error: "Badge not recognized" });
+  const { user, roles } = resolved;
+
+  let choice = roles.length === 1 ? roles[0] : undefined;
+  if (parsed.data.role) {
+    choice = roles.find((r) => r.role === parsed.data.role && (!parsed.data.storeId || r.storeId === parsed.data.storeId));
+    if (!choice) return res.status(403).json({ error: "That role can't be used with a badge sign-in" });
+  }
+  if (!choice) return res.json({ needsRoleSelection: true, roles });
+
+  return res.json({ needsRoleSelection: false, token: issueToken(user, choice), activeRole: choice.role });
 });
 
 const selectRoleSchema = z.object({

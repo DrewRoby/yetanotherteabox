@@ -43,6 +43,11 @@ model User {
   email        String   @unique
   passwordHash String
   name         String
+  // Sign-in-sheet badge (scan-to-login). Only a SHA-256 of the random code is stored —
+  // the plaintext exists only on the printed sheet, so regenerating a sheet rotates the
+  // code and the old one stops working. Null = no badge. See src/services/badge.service.ts.
+  badgeCodeHash String?   @unique
+  badgeIssuedAt DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

@@ -3,6 +3,9 @@ import { prisma } from "../lib/prisma";
 import { authenticate } from "../middleware/auth";
 import { requireRole } from "../middleware/requireRole";
 import { BALANCE_BEARING_ACCOUNT_TYPES, type AccountType } from "../lib/enums";
+import { z } from "zod";
+import { recordAudit } from "../lib/audit";
+import { issueBadges, listBadgeEligibleUsers, revokeBadge } from "../services/badge.service";
 
 export const reportsRouter = Router();
 reportsRouter.use(authenticate);
@@ -156,5 +159,44 @@ reportsRouter.get(
       orderBy: { currentBalance: "desc" },
     });
     res.json(accounts);
+  }
+);
+
+// ---- Employee Sign-In Sheet (scan-to-login badges) ----
+// Lists staff with a badge-eligible role; issuing returns plaintext codes exactly
+// once, for the web to render onto the printable sheet. See badge.service.ts for why
+// codes are hashed at rest and which roles a badge may unlock.
+reportsRouter.get(
+  "/sign-in-sheet",
+  requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER"),
+  async (req, res) => {
+    res.json(await listBadgeEligibleUsers(req.session!.storeId));
+  }
+);
+
+const issueBadgesSchema = z.object({ userIds: z.array(z.string()).min(1).max(200) });
+
+reportsRouter.post(
+  "/sign-in-sheet/issue",
+  requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER"),
+  async (req, res) => {
+    const parsed = issueBadgesSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+    const issued = await issueBadges(req.session!.storeId, parsed.data.userIds);
+    for (const b of issued) {
+      await recordAudit(req.session!, "User", b.userId, "ISSUE_BADGE", { roles: b.roles });
+    }
+    res.json(issued);
+  }
+);
+
+reportsRouter.delete(
+  "/sign-in-sheet/:userId",
+  requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER"),
+  async (req, res) => {
+    const ok = await revokeBadge(req.session!.storeId, req.params.userId);
+    if (!ok) return res.status(404).json({ error: "User not found" });
+    await recordAudit(req.session!, "User", req.params.userId, "REVOKE_BADGE");
+    res.status(204).send();
   }
 );

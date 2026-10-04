@@ -57,7 +57,7 @@ export async function selectRole(userId: string, role: Role, storeId: string) {
   return issueToken(user, match);
 }
 
-function issueToken(user: { id: string; email: string; name: string }, roleOption: RoleOption) {
+export function issueToken(user: { id: string; email: string; name: string }, roleOption: RoleOption) {
   const claims: SessionClaims = {
     sub: user.id,
     activeRole: roleOption.role,

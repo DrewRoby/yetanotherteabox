@@ -4,3 +4,5 @@ xxdetritus/
 *.BAK
 *.db
 *.db-journal
+.env
+store.yaml
