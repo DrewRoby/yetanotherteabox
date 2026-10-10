@@ -45,6 +45,11 @@ async function main() {
   const itemCount = await prisma.item.count();
   const distinctSkus = await prisma.$queryRaw<{ n: number }[]>`SELECT COUNT(DISTINCT sku) as n FROM Item;`;
   check("no duplicate sku", Number(distinctSkus[0].n) === itemCount, `${itemCount} items, ${distinctSkus[0].n} distinct skus`);
+  // ...and itemNumber is gapless 1..N per store, since new intakes take count+1.
+  const gappedStores = await prisma.$queryRaw<{ storeId: string }[]>`
+    SELECT storeId FROM Item GROUP BY storeId
+    HAVING MIN(itemNumber) <> 1 OR MAX(itemNumber) <> COUNT(*) OR COUNT(DISTINCT itemNumber) <> COUNT(*);`;
+  check("itemNumber is unique and gapless 1..N per store", gappedStores.length === 0, `${gappedStores.length} stores violating`);
 
   // 8. Item.status defaults — never silently AVAILABLE for ambiguous source states.
   // (Enforced in transform/crosswalks.ts's mapItemStatus; this just reports the

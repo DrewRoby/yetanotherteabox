@@ -6,12 +6,13 @@ import { authenticate } from "../middleware/auth";
 import { beginSession, selectRole, verifyCredentials, loadRoleOptions, issueToken } from "../services/auth.service";
 import { resolveBadge } from "../services/badge.service";
 import { ROLES } from "../lib/enums";
+import { signRoleSelectionTicket, verifyRoleSelectionTicket } from "../lib/jwt";
 
 export const authRouter = Router();
 
 // The two credential-adjacent, pre-auth endpoints — nothing stops unlimited password
-// guessing against /login today, and /select-role takes a bare userId with no
-// password, which is guessable enumeration if left unlimited too. Keyed by IP (the
+// guessing against /login today, and /select-role is the second half of that same
+// credential exchange (it redeems /login's role-selection ticket). Keyed by IP (the
 // library's default), which is enough for a single-shop deployment; a real multi-
 // tenant SaaS would want this keyed by email/userId as well to stop a distributed
 // guess spread across IPs.
@@ -39,7 +40,9 @@ authRouter.post("/login", credentialLimiter, async (req, res) => {
   if (!result.needsRoleSelection) {
     return res.json({ needsRoleSelection: false, token: result.token, activeRole: result.activeRole });
   }
-  return res.json({ needsRoleSelection: true, userId: user.id, roles: result.roles });
+  // No bare userId here: the ticket is the only thing /select-role will accept as
+  // proof this caller just passed the password check.
+  return res.json({ needsRoleSelection: true, ticket: signRoleSelectionTicket(user.id), roles: result.roles });
 });
 
 // Badge scans get their own, looser limiter: the server binds to 127.0.0.1 by
@@ -83,18 +86,25 @@ authRouter.post("/badge-login", badgeLimiter, async (req, res) => {
 });
 
 const selectRoleSchema = z.object({
-  userId: z.string(),
+  ticket: z.string().min(1),
   role: z.enum(ROLES),
   storeId: z.string(),
 });
 
 // Second step of login when a user holds multiple roles — mirrors the login
-// wireframe's role-picker grid. Also reused by /switch-role below.
+// wireframe's role-picker grid. The user comes from /login's short-lived signed
+// ticket, never from the request body — see signRoleSelectionTicket in lib/jwt.ts.
 authRouter.post("/select-role", credentialLimiter, async (req, res) => {
   const parsed = selectRoleSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  let userId: string;
   try {
-    const token = await selectRole(parsed.data.userId, parsed.data.role, parsed.data.storeId);
+    userId = verifyRoleSelectionTicket(parsed.data.ticket);
+  } catch {
+    return res.status(401).json({ error: "Sign-in expired. Please sign in again." });
+  }
+  try {
+    const token = await selectRole(userId, parsed.data.role, parsed.data.storeId);
     return res.json({ token, activeRole: parsed.data.role });
   } catch (err) {
     return res.status(403).json({ error: (err as Error).message });

@@ -24,5 +24,8 @@
     "dotenv": "^16.4.5",
     "tsx": "^4.16.5",
     "typescript": "^5.5.4"
+  },
+  "optionalDependencies": {
+    "msnodesqlv8": "^5.5.0"
   }
 }

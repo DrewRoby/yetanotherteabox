@@ -14,6 +14,13 @@ actual runtime database, not a scratch file — 3,395 accounts, 756,418 items, 7
 sales, 50,552 payouts, and a real `OWNER` login for Sherry Stacey, all validated
 (`npm run validate`) and confirmed with a live login against the running binary.
 
+**2026-10-10 re-run** from a fresh Liberty backup, on Windows against native SQL
+Server Express into the `dist-bin/` Windows package (see "Windows / native SQL Server
+Express" below). `scripts/migrate.ts` had to learn to populate `Item.itemNumber`
+(required since the `20260915011122_add_item_number` schema migration, which postdates
+the first run) — assigned gapless 1..N in intake order, and `npm run validate` now
+checks that.
+
 Two items remain excluded from this run, decided project-side (not by Sherry
 directly — see spec §9) to unblock the migration rather than guess with real money on
 the line:
@@ -87,6 +94,39 @@ If this fails with `Msg 3169` naming an old database version, the backup predate
 SQL Server's restore-compatibility window — see spec §3.1's history note; that's what
 happened with the first `RWD.bak` we were given (a ~20-year-old SQL Server 2000
 archive, since moved aside). Get a newer backup rather than fighting that error.
+
+## Windows / native SQL Server Express (instead of Linux/Docker)
+
+Steps 0–2 above assume Linux + a dockerized SQL Server. The same migration also runs
+on Windows against a natively installed SQL Server Express instance (first done
+2026-10-10 on the `HT_Liberty` PC: SQL Server 2022 Express, `.\SQLEXPRESS`, targeting
+the Windows test-deploy package in `dist-bin/`). What changes:
+
+| | Linux/Docker | Windows / native SQLEXPRESS |
+|---|---|---|
+| Backup as delivered | `RWD.bak` | `Rwdback.7rbk` — Liberty's own backup utility output, which is actually a **7-Zip archive** (`RWD.BAK` + `rwd.cfg`). Extract `RWD.BAK` with 7-Zip first. |
+| Where the `.bak` lives | bind-mounted `/backups` | Any folder the SQL Server **service account** can read. A non-elevated shell can't write to `MSSQL\Backup` under Program Files, so use e.g. `C:\SQLRestore` and grant `NT Service\MSSQL$SQLEXPRESS` read (`icacls C:\SQLRestore /grant "NT Service\MSSQL$SQLEXPRESS:(OI)(CI)RX" /T`). |
+| `sqlcmd` auth | `-U sa -P ...` | `-S .\SQLEXPRESS -E` (Windows auth; your login is sysadmin on a self-installed Express instance). SQLEXPRESS ships Windows-auth-only, so there is no usable `sa`. |
+| Database name | `Liberty` | `RWD` — matches Liberty's own name (`rwd.cfg`'s `DBName_Prod`). |
+| Restore target paths | `/var/opt/mssql/data/...` | `C:\Program Files\Microsoft SQL Server\MSSQL16.SQLEXPRESS\MSSQL\DATA\rwd_data.mdf` / `rwd_log.ldf` (or `SERVERPROPERTY('InstanceDefaultDataPath')`). Logical names are still `RWD_Empty_Data`/`RWD_Empty_Log`. Liberty's backups are SQL Server 2008 R2 format (version 661); SQL 2022 upgrades them in place on restore. |
+| ETL → SQL Server connection | `mssql`'s default tedious driver, `sa` over TCP 1433 | `MSSQL_TRUSTED_CONNECTION=true` → `extract/db.ts` uses the optional `msnodesqlv8` driver + the installed "ODBC Driver 18 for SQL Server" with Windows integrated auth over shared memory. No need to enable TCP/IP or mixed-mode auth on the instance. DATETIME decoding was checked to match tedious (`useUTC`). |
+| Target Teabox DB | `~/.local/share/teabox/teabox.db` | `dist-bin/teabox.db`, next to `teabox.exe` (portable mode). Use a forward-slash drive-letter URL: `file:C:/code/yetanotherteabox/dist-bin/teabox.db` — never `/c/...` from Git Bash (see root `CLAUDE.md`). |
+| Fresh target | copy the baked `template.db` | `teabox.db` is often **not** empty: `dist-bin/config.env`'s `SETUP_*` vars auto-create a Store on first launch, which makes `migrate` refuse to run. Move the old file into `dist-bin/arch/`, then from `server/`: `DATABASE_URL="file:C:/.../dist-bin/teabox.db" npx prisma migrate deploy`. This applies the repo's current migrations, which may be newer than the exe's baked template — fine as long as the new columns are nullable (the exe never migrates at runtime and ignores extra columns), and required anyway because the ETL writes through `server/`'s current Prisma client. |
+
+Windows restore, end to end (PowerShell; adjust the drive letter):
+
+```
+& 'C:\Program Files\7-Zip\7z.exe' e D:\Rwdback.7rbk RWD.BAK -oC:\SQLRestore -y
+icacls C:\SQLRestore /grant 'NT Service\MSSQL$SQLEXPRESS:(OI)(CI)RX' /T
+sqlcmd -S .\SQLEXPRESS -E -Q "RESTORE FILELISTONLY FROM DISK = 'C:\SQLRestore\RWD.BAK'"
+sqlcmd -S .\SQLEXPRESS -E -b -Q "ALTER DATABASE RWD SET SINGLE_USER WITH ROLLBACK IMMEDIATE; RESTORE DATABASE RWD FROM DISK = 'C:\SQLRestore\RWD.BAK' WITH MOVE 'RWD_Empty_Data' TO 'C:\Program Files\Microsoft SQL Server\MSSQL16.SQLEXPRESS\MSSQL\DATA\rwd_data.mdf', MOVE 'RWD_Empty_Log' TO 'C:\Program Files\Microsoft SQL Server\MSSQL16.SQLEXPRESS\MSSQL\DATA\rwd_log.ldf', REPLACE, STATS = 20; ALTER DATABASE RWD SET MULTI_USER;"
+```
+
+(Drop the `ALTER DATABASE ... SINGLE_USER` part on the very first restore, when `RWD`
+doesn't exist yet.) Then set `.env` per `.env.example`'s Windows block, `npm install`
+(pulls `msnodesqlv8`; npm may warn that it skipped its install script — harmless, it
+ships prebuilt binaries), and run step 2 with the `file:C:/...` URL above. Make sure
+`teabox.exe` is **not running** during the load.
 
 ## 1. Profile the restored database
 

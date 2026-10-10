@@ -9,6 +9,7 @@ import "dotenv/config";
 import * as fs from "fs";
 import * as path from "path";
 import sql from "mssql";
+import { connect } from "../extract/db";
 
 const SAMPLE_SIZE = 2000;
 const RANDOM_SAMPLE_ROW_LIMIT = 200_000; // above this, skip ORDER BY NEWID() (full sort is too costly)
@@ -43,26 +44,6 @@ interface TableProfile {
   rowCount: number;
   columns: ColumnProfile[];
   fkGuesses: { column: string; likelyReferences: string }[];
-}
-
-function getConfig(): sql.config {
-  const required = ["MSSQL_HOST", "MSSQL_USER", "MSSQL_PASSWORD", "MSSQL_DATABASE"];
-  for (const key of required) {
-    if (!process.env[key]) {
-      throw new Error(`Missing required env var ${key} — copy .env.example to .env first.`);
-    }
-  }
-  return {
-    server: process.env.MSSQL_HOST!,
-    port: Number(process.env.MSSQL_PORT ?? 1433),
-    user: process.env.MSSQL_USER!,
-    password: process.env.MSSQL_PASSWORD!,
-    database: process.env.MSSQL_DATABASE!,
-    options: {
-      encrypt: process.env.MSSQL_ENCRYPT === "true",
-      trustServerCertificate: true,
-    },
-  };
 }
 
 async function getTableRowCounts(pool: sql.ConnectionPool): Promise<TableRowCount[]> {
@@ -228,7 +209,7 @@ function toMarkdown(profiles: TableProfile[], skipped: TableRowCount[]): string 
 }
 
 async function main() {
-  const pool = await sql.connect(getConfig());
+  const pool = await connect();
   try {
     console.log("Fetching table row counts...");
     const allTables = await getTableRowCounts(pool);

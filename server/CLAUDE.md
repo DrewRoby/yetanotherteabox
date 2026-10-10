@@ -28,7 +28,7 @@ are plain strings, validated against the TS unions in `src/lib/enums.ts` (the
 source of truth for valid values; keep in sync with `web/src/auth/roles.ts` by hand,
 no shared package).
 
-- `User` — auth identity only (email/passwordHash/name). Never carries roles directly.
+- `User` — auth identity only (email/passwordHash/name, plus `badgeCodeHash`/`badgeIssuedAt` for sign-in-sheet badges — see "Sign-in-sheet badges" below). Never carries roles directly.
 - `UserRole` — `(userId, role, storeId, accountId?)`. One row per role a person holds; a user with both `MANAGER` and `CONSIGNOR` rows still only acts as one per session. `accountId` set for account-scoped roles (Consignor/Vendor/Donor/Booth Owner) — links the grant to the `Account` it acts on.
 - `Store` — one per shop.
 - `Account` — polymorphic party items/payouts attach to: `accountType ∈ {CONSIGNOR, VENDOR, DONOR, BOOTH_OWNER, STORE}`. Every store has exactly one `STORE`-type account (store-owned inventory) so intake always has a target. `serializeAccount()` (`src/services/accounts.service.ts`) strips `currentBalance` from the API response entirely for non-balance-bearing types (Donor, Store) — not just hidden in the UI. `mailingAddress` (free text, like `Store.location`) and `paymentMethod` have **no current write path** — populated only by direct SQL (e.g. a migration), not reachable via any route or UI today.
@@ -38,11 +38,26 @@ no shared package).
 
 ## Auth flow (`src/routes/auth.routes.ts`, `src/services/auth.service.ts`)
 
-`POST /login` → 1 role: issues token immediately. >1 role: returns the role list, no
-token (drives the login page's role picker). `POST /select-role` (public, second
-step) / `POST /switch-role` (authenticated) both re-validate the user actually holds
-`(role, storeId)` via `UserRole` before signing a new JWT — a session can never talk
-itself into an ungranted role. `GET /me` returns the decoded session + fresh role list.
+`POST /login` → 1 role: issues token immediately. >1 role: returns the role list plus
+a **role-selection ticket** — no session token, and deliberately no `userId` (drives
+the login page's role picker). `POST /select-role { ticket, role, storeId }` (public,
+second step) takes the user **only** from that ticket; `POST /switch-role`
+(authenticated) takes it from the current session. Both then re-validate the user
+actually holds `(role, storeId)` via `UserRole` before signing a new JWT — a session
+can never talk itself into an ungranted role. `GET /me` returns the decoded session +
+fresh role list.
+
+Why the ticket: a user's cuid is not a secret (it's in `/me`, `/settings/users`, and
+other payloads), so a `/select-role` that trusted a body `userId` let anyone mint a
+session as any multi-role user without their password. The ticket
+(`signRoleSelectionTicket`/`verifyRoleSelectionTicket` in `lib/jwt.ts`) is a 5-minute
+JWT signed with the same secret as sessions, distinguished by a `typ` claim:
+sessions carry `typ: "session"`, tickets `typ: "role-selection"`, and each verifier
+rejects the other's — so `authenticate`/`verifySession` never accept a ticket as a
+session (and a session can't be replayed as a ticket). Don't add a `userId` field
+back to `/select-role`. An expired ticket 401s; the web client drops back to the
+password form. (Adding the `typ` check invalidated any pre-existing session tokens,
+which lacked it — a one-time re-login.)
 
 `/login` and `/select-role` are both rate-limited (`express-rate-limit`, 20 requests /
 15 min / IP — see `credentialLimiter` in `auth.routes.ts`) since they're the two
@@ -52,6 +67,31 @@ first run and persists as a `jwt-secret` file next to the database — never the
 hardcoded fallback string in `lib/jwt.ts`, which only a plain `npm run dev` actually
 uses. See root `CLAUDE.md`'s "Roadmap toward a real commercial deployment" for the
 rest of the hardening pass this came out of (host binding, helmet, CORS).
+
+## Sign-in-sheet badges (`src/services/badge.service.ts`)
+
+Scan-to-login codes printed on Reports > Employee Sign-In Sheet. `POST
+/auth/badge-login { code, role?, storeId? }` mirrors `/login`'s two-step shape, but the
+role-choice step re-sends the **code** rather than going through `/select-role`, so
+both steps prove possession of the credential. Rules that make a paper credential
+acceptable:
+- Only `BADGE_ROLES` (`MANAGER`, `EMPLOYEE`, `REGISTER`) can be entered via badge —
+  Owner/Admin and account-scoped roles always need a password, even for a person who
+  also holds a badge role (Sarah's badge signs in as Manager only, never Consignor).
+  Because Manager is the ceiling, every session allowed to issue badges already
+  outranks what a badge unlocks; adding `OWNER` to the list would need an issuer-rank
+  check too.
+- Codes are `TBXB-` + 20 uppercase Crockford-base32 chars (100 random bits, distinct
+  from item SKUs, uppercase so HID scanners/Caps Lock can't mangle them). Only a
+  SHA-256 is stored (`User.badgeCodeHash`, unique) — the plaintext is returned once
+  by `POST /reports/sign-in-sheet/issue`, so printing a sheet **rotates** those
+  users' codes and a lost sheet is handled by reprinting or revoking
+  (`DELETE /reports/sign-in-sheet/:userId`). Issue/revoke are audited
+  (`ISSUE_BADGE`/`REVOKE_BADGE`) and scoped to users with a badge role at the
+  session's store.
+- `/badge-login` has its own looser limiter (200/15 min) than `credentialLimiter`:
+  with the default `127.0.0.1` bind every register shares one IP, and a shift of
+  badge logins would trip 20/15 min; 100-bit codes don't need the tighter limit.
 
 ## Setup Wizard (`src/routes/setup.routes.ts`, `src/services/setup.service.ts`)
 
@@ -141,7 +181,9 @@ balance by its `splitPercent` — skipped for `DONOR`/`STORE` accounts (no payou
 
 Aggregates computed live from Prisma, not cached. `localDateKey()` buckets by the
 server's **local** calendar day consistently for both range boundaries and bucket
-keys — see root `CLAUDE.md`'s gotcha list for why this matters.
+keys — see root `CLAUDE.md`'s gotcha list for why this matters. Also hosts the
+sign-in-sheet badge endpoints (`/sign-in-sheet`, `/sign-in-sheet/issue`,
+`/sign-in-sheet/:userId`) — see "Sign-in-sheet badges" above.
 
 ## Adapters (`src/adapters/`) — all stubs, all swappable
 

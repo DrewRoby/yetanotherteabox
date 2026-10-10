@@ -1,4 +1,4 @@
-<!-- migration-spec-freshness: schema.prisma=31546296 enums.ts=0661a0ed -->
+<!-- migration-spec-freshness: schema.prisma=af8596a6 enums.ts=0661a0ed -->
 # Teabox ERP — Data Model Migration Spec (SQL Server source)
 
 Status: **living document**. Update this file whenever the Prisma schema
@@ -414,6 +414,8 @@ store-owned stock at.
 | `email` | `String` | **unique** across the whole DB | Source systems sometimes allow duplicate emails across roles/locations (e.g. an owner who's also a vendor, logged as two rows with the same email). Teabox instead models this as **one `User` row with two `UserRole` rows** — see §4.4 and §7.1. Deduplicate by email before creating `User` rows. |
 | `passwordHash` | `String` | bcrypt, cost 10 (`bcryptjs`) | **Cannot be migrated from a SQL Server source as a hash reuse** — see §7.2. Every migrated login needs a new bcrypt hash, produced via a forced-reset flow, not a hash format conversion. |
 | `name` | `String` | required | |
+| `badgeCodeHash` | `String?` | **unique** when set | Sign-in-sheet scan-to-login badge (SHA-256 of the code). **Leave `null`** — a migration has no plaintext code to hash, and legacy badge/PIN values must not be carried over; staff get badges by printing a sheet from Reports after go-live. |
+| `badgeIssuedAt` | `DateTime?` | | Leave `null` alongside `badgeCodeHash`. |
 | `createdAt` / `updatedAt` | `DateTime` | | |
 
 A `User` carries **no roles or store affiliation directly** — that's the entire point

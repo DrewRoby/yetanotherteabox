@@ -32,3 +32,24 @@ body {
   right: -2px;
   border-width: 0 2px 2px 0;
 }
+
+/* Printing a single region of a page (e.g. Reports > Employee Sign-In Sheet): only
+   `.print-area` and its contents show; `.no-print` controls inside it are dropped. */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .print-area,
+  .print-area * {
+    visibility: visible;
+  }
+  .print-area {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 100%;
+    border: none !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+}

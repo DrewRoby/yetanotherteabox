@@ -20,7 +20,7 @@ call the matching server endpoint, store the JWT (`src/api/client.ts`'s
 Order matters: `loading` → blank; else if `!user && needsSetup` → force `/setup`
 regardless of requested path (new deployment, no session yet); else render `Routes`.
 `HomeRedirect` (root path) picks the landing page **by active role** — staff →
-`/dashboard`, `BOOTH_OWNER` → `/booth-pricing`, else → `/portal`. Always navigate
+`/dashboard`, `BOOTH_OWNER` → `/booth-pricing`, `REGISTER` → `/pos`, else → `/portal`. Always navigate
 through `"/"` (or call nothing and let this resolve) after login/role-select/switch —
 never hardcode a destination route, since it depends on the role just chosen.
 `RequireRole` (`src/auth/RequireRole.tsx`) wraps each route as a **UX-only** gate
@@ -39,7 +39,7 @@ the two apps — update both if roles change).
 | Path | Component | Roles | Notes |
 |---|---|---|---|
 | `/setup` | `SetupWizardPage` | none (pre-auth) | 3-step: Welcome → Shop → Owner. Blocked once `needsSetup` is false. |
-| `/login` | `LoginPage` | none | Handles the multi-role picker step inline. |
+| `/login` | `LoginPage` | none | Handles the multi-role picker step inline. Also badge sign-in: a scan into the autofocused Email field (value starting `TBXB-` + Enter) is routed to `/auth/badge-login`, as is the explicit "Or scan your badge" field / Camera button. |
 | `/dashboard` | `DashboardPage` | staff | Role-specific widgets from `/reports/dashboard`. |
 | `/inventory`, `/inventory/:id` | `InventoryPage`, `ItemDetailPage` | staff | |
 | `/intake` | `IntakePage` | staff + Consignor/Booth Owner | Locked "Intake For" card vs. required account `<select>` — mirrors `resolveIntakeAccountId` server-side. Saving queues a tag into the "Tag Batch" panel instead of printing immediately — see "Ticket printing" below. |
@@ -47,7 +47,7 @@ the two apps — update both if roles change).
 | `/accounts`, `/accounts/:id` | `AccountsPage` | staff | Tabbed by `accountType`; Donor tab never renders a balance column. "+ Add Account" (Owner/Manager/Admin only, hidden on the Store tab) opens a modal posting to the pre-existing `POST /accounts` — see `server/CLAUDE.md`'s "Accounts" section. |
 | `/portal` | `ConsignorPortalPage` | Consignor/Vendor/Donor | Self-service, own account only (`/accounts/me/profile`). |
 | `/booth-pricing` | `BoothOwnerPricingPage` | Booth Owner (own items) + Manager/Owner (pick a booth) | Inline price edits + bulk % adjustment. |
-| `/reports` | `ReportsPage` | Manager/Owner/Admin | Daily sales, aging, payouts; CSV export via raw `fetch` (blob download, not the JSON api client). |
+| `/reports` | `ReportsPage` | Manager/Owner/Admin | Daily sales, aging, payouts; CSV export via raw `fetch` (blob download, not the JSON api client). Plus two tools in `pages/reports/`: **Employee Sign-In Sheet** (`SignInSheet.tsx` — issues/rotates/revokes scan-to-login badges and prints them; plaintext codes exist only in component state while the sheet is on screen) and **Barcode Generator** (`BarcodeGenerator.tsx` — any text → PNG, fully client-side). Both offer Code128 or QR via `lib/codeImage.ts`. |
 | `/settings` | `SettingsPage` | Manager/Owner/Admin | Tabbed; Users & Permissions restricted further to Owner/Admin inside the page. |
 
 ## Barcode scanning (`PosPage`'s "Scan Input")
@@ -76,6 +76,12 @@ Used on `IntakePage` (in place of the old disabled "assigned automatically" inpu
 once `result.sku` comes back from the save) and on `ItemDetailPage` next to the SKU
 line, so the same tag/barcode that's on the physical item can be reprinted or
 re-scanned for verification.
+
+`lib/codeImage.ts` is the raster counterpart: renders any value to a PNG data URL as
+Code128 (`jsbarcode` on a canvas) or QR (`qrcode`), for the Reports page's sign-in
+sheet and Barcode Generator. Code128 is ASCII-only — `barcodeUnsupportedReason()`
+catches non-ASCII/over-long input up front and points the user at QR (UTF-8) instead.
+Print-only regions use `.print-area` / `.no-print` from `index.css`.
 
 ## Ticket printing (`IntakePage`'s "Tag Batch" panel)
 

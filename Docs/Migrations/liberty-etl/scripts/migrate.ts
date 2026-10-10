@@ -169,6 +169,7 @@ async function main() {
 
   const itemIdByLibertyItemId = new Map<number, string>();
   const itemRows: any[] = [];
+  const libertyItemIdByRow = new Map<any, number>();
   let skippedForExcludedOwner = 0;
 
   for (const item of items) {
@@ -204,7 +205,19 @@ async function main() {
       accountId,
       storeId,
     });
+    libertyItemIdByRow.set(itemRows[itemRows.length - 1], t.libertyItemId);
   }
+  // itemNumber: per-store 1..N over intake order (ITEM_ID as tiebreak), same strategy
+  // as the 20260915011122_add_item_number backfill (spec §4, Item.itemNumber). Must be
+  // gapless — new intakes take `count(items in store) + 1` (server items.routes.ts), so
+  // any gap here would make a future intake collide with a migrated number.
+  itemRows.sort(
+    (a, b) =>
+      a.intakeDate.getTime() - b.intakeDate.getTime() || libertyItemIdByRow.get(a)! - libertyItemIdByRow.get(b)!
+  );
+  itemRows.forEach((row, i) => {
+    row.itemNumber = i + 1;
+  });
   await createManyChunked((data) => prisma.item.createMany({ data }), itemRows, 2000, "items");
   console.log(`Created ${itemRows.length} Item rows (${skippedForExcludedOwner} skipped — owned by an excluded account).`);
 

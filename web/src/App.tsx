@@ -23,6 +23,8 @@ function HomeRedirect() {
   if (!user) return <Navigate to="/login" replace />;
   if ((STAFF as readonly string[]).includes(user.activeRole)) return <Navigate to="/dashboard" replace />;
   if (user.activeRole === "BOOTH_OWNER") return <Navigate to="/booth-pricing" replace />;
+  // Register's only screen is POS (see NAV_ENTRIES) — /portal would be Access Denied.
+  if (user.activeRole === "REGISTER") return <Navigate to="/pos" replace />;
   return <Navigate to="/portal" replace />;
 }
 

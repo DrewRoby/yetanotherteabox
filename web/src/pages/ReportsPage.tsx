@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { api, getToken } from "../api/client";
 import { Button, Card } from "../components/Card";
+import { SignInSheet } from "./reports/SignInSheet";
+import { BarcodeGenerator } from "./reports/BarcodeGenerator";
 
 interface DailySalesRow {
   date: string;
@@ -18,21 +20,27 @@ interface PayoutAccount {
   currentBalance: number;
 }
 
-const TABS = ["Daily Sales Summary", "Unsold Inventory Aging", "Consignor Payout Statements"] as const;
+const TABS = [
+  "Daily Sales Summary",
+  "Unsold Inventory Aging",
+  "Consignor Payout Statements",
+  "Employee Sign-In Sheet",
+  "Barcode Generator",
+] as const;
 
 export function ReportsPage() {
   const [tab, setTab] = useState<(typeof TABS)[number]>(TABS[0]);
 
   return (
     <div className="p-8">
-      <div className="flex justify-between items-center mb-6">
+      <div className="no-print flex justify-between items-center mb-6">
         <h1 className="text-xl font-bold uppercase">Reports &amp; Analytics</h1>
         <Button variant="outline" onClick={() => downloadCsv()}>
           Export CSV
         </Button>
       </div>
 
-      <div className="flex gap-1 mb-6">
+      <div className="no-print flex flex-wrap gap-1 mb-6">
         {TABS.map((t) => (
           <button
             key={t}
@@ -47,6 +55,8 @@ export function ReportsPage() {
       {tab === "Daily Sales Summary" && <DailySales />}
       {tab === "Unsold Inventory Aging" && <InventoryAging />}
       {tab === "Consignor Payout Statements" && <PayoutStatements />}
+      {tab === "Employee Sign-In Sheet" && <SignInSheet />}
+      {tab === "Barcode Generator" && <BarcodeGenerator />}
     </div>
   );
 }
