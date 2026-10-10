@@ -51,6 +51,25 @@ async function main() {
     HAVING MIN(itemNumber) <> 1 OR MAX(itemNumber) <> COUNT(*) OR COUNT(DISTINCT itemNumber) <> COUNT(*);`;
   check("itemNumber is unique and gapless 1..N per store", gappedStores.length === 0, `${gappedStores.length} stores violating`);
 
+  // Itemized payouts: lines sum to the payout amount. Compared by magnitude because
+  // transformPayout stores |PAYOUT_AMT| while lines keep Liberty's signs (236 Liberty
+  // payouts are negative reversals).
+  const lineSumMismatches = await prisma.$queryRaw<{ n: number }[]>`
+    SELECT COUNT(*) AS n FROM Payout p
+    JOIN (SELECT payoutId, SUM(amount) AS s FROM PayoutLine GROUP BY payoutId) l ON l.payoutId = p.id
+    WHERE ABS(ABS(l.s) - p.amount) > 0.005;`;
+  const itemizedPayouts = await prisma.payout.count({ where: { lines: { some: {} } } });
+  const payoutCount = await prisma.payout.count();
+  check(
+    "itemized payouts' lines sum to the payout amount",
+    Number(lineSumMismatches[0].n) === 0,
+    `${Number(lineSumMismatches[0].n)} mismatched; ${itemizedPayouts} of ${payoutCount} payouts itemized`
+  );
+  const soldWithoutLastSale = await prisma.account.count({
+    where: { lastSaleAt: null, items: { some: { sales: { some: {} } } } },
+  });
+  check("every account with a sale has lastSaleAt", soldWithoutLastSale === 0, `${soldWithoutLastSale} missing`);
+
   // 8. Item.status defaults — never silently AVAILABLE for ambiguous source states.
   // (Enforced in transform/crosswalks.ts's mapItemStatus; this just reports the
   // resulting distribution for a human sanity check.)

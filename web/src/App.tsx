@@ -72,6 +72,7 @@ export function App() {
       />
       <Route path="/accounts" element={<RequireRole roles={[...STAFF]}><Shell><AccountsPage /></Shell></RequireRole>} />
       <Route path="/accounts/:id" element={<RequireRole roles={[...STAFF]}><Shell><AccountsPage /></Shell></RequireRole>} />
+      <Route path="/accounts/:id/payouts/:payoutId" element={<RequireRole roles={[...STAFF]}><Shell><AccountsPage /></Shell></RequireRole>} />
       <Route
         path="/portal"
         element={

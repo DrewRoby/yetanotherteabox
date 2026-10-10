@@ -32,6 +32,12 @@ export type ItemStatus = (typeof ITEM_STATUSES)[number];
 export const PAYOUT_STATUSES = ["REQUESTED", "APPROVED", "PAID", "REJECTED"] as const;
 export type PayoutStatus = (typeof PAYOUT_STATUSES)[number];
 
+// PayoutLine.lineType. SALE/PURCHASE carry an itemId; the rest are account-level
+// adjustments. ADJUSTMENT also covers any part of a payout amount not attributable to
+// specific sales (e.g. a balance carried over from a migrated system).
+export const PAYOUT_LINE_TYPES = ["SALE", "PURCHASE", "RETURN", "DEDUCTION", "FEE", "ADVANCE", "ADJUSTMENT"] as const;
+export type PayoutLineType = (typeof PAYOUT_LINE_TYPES)[number];
+
 export function roleToAccountType(role: Role): AccountType | null {
   switch (role) {
     case "CONSIGNOR":

@@ -62,3 +62,23 @@ export function mapConsignmentType(acquisitionTypeId: number): string | null {
   if (acquisitionTypeId === 4) return "Trade";
   return null;
 }
+
+// TRANS_CD_ID -> Teabox PayoutLine.lineType (server/src/lib/enums.ts PAYOUT_LINE_TYPES).
+// TRANS_CD is self-describing (spec §3.1); codes with zero rows in Hidden Treasures'
+// data are mapped anyway by their name so another Liberty shop doesn't fall through.
+const TRANS_CD_TO_LINE_TYPE: Record<number, string> = {
+  1: "SALE", // Sold Item
+  5: "SALE", // Sold Online
+  2: "PURCHASE", // Purchased Item (store bought it outright from the client)
+  11: "RETURN", // Return Sale
+  3: "DEDUCTION", // Deduction
+  16: "DEDUCTION", // Sale Deduction
+  6: "FEE", // Listing Fee
+  7: "FEE", // Check Fee
+  14: "FEE", // Final Value Fee
+  12: "ADVANCE", // Payment Advance
+};
+
+export function mapPayoutLineType(transCdId: number): string {
+  return TRANS_CD_TO_LINE_TYPE[transCdId] ?? "ADJUSTMENT"; // Adjustment, Store Credit Purchase, Reconciliation, Forfeited Balance, ...
+}

@@ -1,5 +1,5 @@
-import type { PayoutRow } from "../extract/liberty";
-import { mapPayoutStatus } from "./crosswalks";
+import type { PayoutLineRow, PayoutRow } from "../extract/liberty";
+import { mapPayoutLineType, mapPayoutStatus } from "./crosswalks";
 
 export interface TransformedPayout {
   libertyClientId: number;
@@ -18,5 +18,28 @@ export function transformPayout(payout: PayoutRow): TransformedPayout {
     status,
     createdAt,
     paidAt: status === "PAID" ? createdAt : null,
+  };
+}
+
+export interface TransformedPayoutLine {
+  libertyPayoutId: number;
+  libertyItemId: number | null;
+  lineType: string;
+  description: string | null;
+  transTs: Date | null;
+  amount: number;
+}
+
+// Amount keeps Liberty's sign (deductions/returns negative). Description keeps the
+// source transaction label, plus Liberty's free-text note when it has one.
+export function transformPayoutLine(line: PayoutLineRow): TransformedPayoutLine {
+  const note = line.ACT_TRANS_DESC?.trim();
+  return {
+    libertyPayoutId: line.PAYOUT_ID,
+    libertyItemId: line.ITEM_ID ? line.ITEM_ID : null,
+    lineType: mapPayoutLineType(line.TRANS_CD_ID),
+    description: note ? `${line.TRANS_CD_DESC}: ${note}` : line.TRANS_CD_DESC,
+    transTs: line.ACT_TRANS_TS,
+    amount: line.ACT_TRANS_AMT ?? 0,
   };
 }

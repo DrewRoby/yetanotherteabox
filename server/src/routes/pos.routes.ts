@@ -5,6 +5,7 @@ import { authenticate } from "../middleware/auth";
 import { requireRole } from "../middleware/requireRole";
 import { recordAudit } from "../lib/audit";
 import { BALANCE_BEARING_ACCOUNT_TYPES, type AccountType } from "../lib/enums";
+import { consignorShareOf } from "../services/accounts.service";
 
 export const posRouter = Router();
 posRouter.use(authenticate, requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER", "EMPLOYEE", "REGISTER"));
@@ -109,14 +110,18 @@ posRouter.post("/checkout", async (req, res) => {
       },
     });
 
-    if (BALANCE_BEARING_ACCOUNT_TYPES.includes(item.account.accountType as AccountType)) {
-      const splitPercent = item.account.splitPercent ?? 100;
-      const consignorShare = (line.salePrice * splitPercent) / 100;
-      await prisma.account.update({
-        where: { id: item.account.id },
-        data: { currentBalance: { increment: consignorShare } },
-      });
-    }
+    // lastSaleAt for every account type (the Accounts list shows it on all tabs); the
+    // balance credit only for balance-bearing ones.
+    const credit = BALANCE_BEARING_ACCOUNT_TYPES.includes(item.account.accountType as AccountType)
+      ? consignorShareOf(line.salePrice, item.account.splitPercent)
+      : null;
+    await prisma.account.update({
+      where: { id: item.account.id },
+      data: {
+        lastSaleAt: sale.saleDate,
+        ...(credit !== null ? { currentBalance: { increment: credit } } : {}),
+      },
+    });
 
     await recordAudit(session, "Sale", sale.id, "CHECKOUT", { itemId: item.id, salePrice: line.salePrice });
     sales.push(sale);

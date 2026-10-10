@@ -95,6 +95,7 @@ model Account {
   mailingAddress String? // free text, concatenated — same convention as Store.location. No current write path (see server/CLAUDE.md).
   splitPercent   Int? // consignor/vendor/booth-owner revenue share, e.g. 60
   currentBalance Float    @default(0)
+  lastSaleAt     DateTime? // denormalized MAX(Sale.saleDate) over this account's items — stamped by POS checkout, so the Accounts list doesn't aggregate ~1M sales per load
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -135,8 +136,9 @@ model Item {
   account Account       @relation(fields: [accountId], references: [id])
   store   Store         @relation(fields: [storeId], references: [id])
   photos  Photo[]
-  history ItemHistory[]
-  sales   Sale[]
+  history     ItemHistory[]
+  sales       Sale[]
+  payoutLines PayoutLine[]
 
   @@unique([storeId, itemNumber])
   @@index([storeId, status])
@@ -177,10 +179,12 @@ model Sale {
   processedById String?
   storeId       String
 
-  item        Item  @relation(fields: [itemId], references: [id])
-  processedBy User? @relation(fields: [processedById], references: [id])
+  item        Item         @relation(fields: [itemId], references: [id])
+  processedBy User?        @relation(fields: [processedById], references: [id])
+  payoutLines PayoutLine[]
 
   @@index([storeId, saleDate])
+  @@index([itemId])
 }
 
 // `status` is one of: REQUESTED, APPROVED, PAID, REJECTED.
@@ -192,7 +196,30 @@ model Payout {
   createdAt DateTime  @default(now())
   paidAt    DateTime?
 
-  account Account @relation(fields: [accountId], references: [id])
+  account Account      @relation(fields: [accountId], references: [id])
+  lines   PayoutLine[]
+}
+
+// Itemization of a Payout: what it covered. Signed amounts (deductions/returns are
+// negative); for a PAID payout they sum to Payout.amount. `lineType` is one of
+// PAYOUT_LINE_TYPES (src/lib/enums.ts). A Sale with a PayoutLine has been paid out —
+// that's how generating the next payout knows which sales are still owed.
+model PayoutLine {
+  id          String  @id @default(cuid())
+  payoutId    String
+  lineType    String
+  itemId      String?
+  saleId      String?
+  description String?
+  amount      Float
+
+  payout Payout @relation(fields: [payoutId], references: [id])
+  item   Item?  @relation(fields: [itemId], references: [id])
+  sale   Sale?  @relation(fields: [saleId], references: [id])
+
+  @@index([payoutId])
+  @@index([itemId])
+  @@index([saleId])
 }
 
 model Device {

@@ -1,4 +1,4 @@
-<!-- migration-spec-freshness: schema.prisma=af8596a6 enums.ts=0661a0ed -->
+<!-- migration-spec-freshness: schema.prisma=ea18333d enums.ts=770b0724 -->
 # Teabox ERP — Data Model Migration Spec (SQL Server source)
 
 Status: **living document**. Update this file whenever the Prisma schema
@@ -395,6 +395,7 @@ One `Store` row per physical location (§2).
 | `paymentMethod` | `String?` | **no current write path** | JSON-encoded `{ method, details }` per the schema comment (`prisma/schema.prisma:84`), but `accounts.routes.ts`'s `createAccountSchema` doesn't accept this field and no UI reads/writes it. Safe to populate directly via SQL if the source has payout-method data worth preserving (e.g. "Check", "PayPal: foo@bar.com") — nothing will validate or display it yet, but it's forward-compatible storage. Flag to product/eng if this data matters; a feature to surface it doesn't exist yet. |
 | `splitPercent` | `Int?` | 0–100 (`z.number().min(0).max(100)`, app-layer only) | **Direction matters**: this is the payee's (consignor/vendor/booth owner's) share, credited to their balance on sale — e.g. `splitPercent: 60` means the consignor keeps 60% and the store keeps 40%. Many legacy systems store the *store's* cut instead ("commission rate"). **Confirm the direction explicitly per source system before loading** — an inverted split silently pays consignors the store's share and vice versa, and nothing in the app catches this (see `pos.routes.ts:112-119`: `consignorShare = salePrice * splitPercent / 100`). Leave `null` only for `DONOR`/`STORE` accounts, which never use it. |
 | `currentBalance` | `Float` | default 0; **stripped from API response entirely** for `DONOR`/`STORE` accounts (`serializeAccount()`, `server/src/services/accounts.service.ts`) | This must equal, at cutover: `SUM(credited sale shares since last payout) − SUM(paid payouts not yet reflected)`, i.e. the *currently owed, unpaid* balance — not lifetime earnings. See §5 for the reconciliation formula and §6 for the float-precision caveat. Must be `0` for every `DONOR` and `STORE` account (the app never writes to these accounts' balances — `pos.routes.ts` only credits `BALANCE_BEARING_ACCOUNT_TYPES`). |
+| `lastSaleAt` | `DateTime?` | | Denormalized `MAX(Sale.saleDate)` over the account's items (the Accounts list's "Latest Sale" column). The live app stamps it at POS checkout; a migration that inserts `Sale` rows directly must set it afterward — the `20261010221750` schema migration's backfill `UPDATE` does exactly that and can be re-run as-is. |
 | `createdAt` / `updatedAt` | `DateTime` | | |
 
 Every `Store` **must** have exactly one `Account` row with `accountType: "STORE"` —
@@ -528,13 +529,38 @@ live-transaction endpoint, not a ledger-replay one.**
 | `createdAt` | `DateTime` | default now | |
 | `paidAt` | `DateTime?` | set when `status = "PAID"` | |
 
-Payouts are **account-level aggregates**, not tied to specific `Sale`/`Item` rows —
-there is no join table recording "this payout covered these sales." If the source
-system tracks per-sale payout allocation and that traceability matters to the shop
-owner, it will be **lost** on migration unless preserved out-of-band (e.g. as a note
-in `AuditLog.details`, §4.11, or an external archive) — flag this explicitly to
-whoever's running the migration project, since it's a real (if narrow) capability
-regression, not an oversight in this spec.
+### 4.9a `PayoutLine` (itemization of a `Payout`)
+
+Added 2026-10-10 (migration `20261010221750_add_payout_lines_and_last_sale`). Before
+that, payouts were account-level aggregates only and per-sale payout traceability was
+lost on migration; now it's carried over when the source has it.
+
+| Field | Type | Constraints | Notes |
+|---|---|---|---|
+| `id` | `String` (cuid) | PK | |
+| `payoutId` | `String` | FK → `Payout`, required | |
+| `lineType` | `String` | one of `PAYOUT_LINE_TYPES` (`SALE`, `PURCHASE`, `RETURN`, `DEDUCTION`, `FEE`, `ADVANCE`, `ADJUSTMENT`) | `ADJUSTMENT` is the catch-all for anything else, including the unitemized remainder the app writes when a payout's amount isn't fully explained by sales. |
+| `itemId` | `String?` | FK → `Item` | Set for item-bearing lines (`SALE`, `PURCHASE`, `RETURN`). |
+| `saleId` | `String?` | FK → `Sale` | **Load-bearing for future payouts**: the app treats a `Sale` with any `PayoutLine` as already paid out. Set it on `SALE` lines whenever the sale is identifiable (for an item sold more than once, pick the sale nearest the source's credit timestamp). |
+| `description` | `String?` | | Source transaction label/note. |
+| `amount` | `Float` | required, **signed** | Deductions/returns negative. For a `PAID` payout, lines must sum to `Payout.amount` (by magnitude if the source stores reversal payouts as negative amounts — `Payout.amount` itself is migrated as a magnitude). |
+
+Validated by `liberty-etl`'s `npm run validate` (lines sum to amount per itemized
+payout). A payout with no lines is fine — the UI shows it as an unitemized lump sum.
+
+**Liberty**: `CLIENT_TRANS.PAYOUT_ID` is the link (`qryCheckDetailReport` is built on
+it). 55,158 of 55,204 payouts have item-bearing rows and every payout's rows sum
+exactly to `PAYOUT.PAYOUT_AMT` (0 mismatches, 2026-10-10 backup). `TRANS_CD_ID` →
+`lineType` crosswalk lives in `transform/crosswalks.ts::mapPayoutLineType`.
+
+**How the app writes lines going forward** (`generatePaidPayout`,
+`server/src/services/accounts.service.ts`): one `SALE` line per sale of the account's
+items that has no `PayoutLine` and postdates the account's latest `PAID` payout (the
+date floor keeps never-itemized historical sales — ~3% of Liberty's sale credits had
+no `PAYOUT_ID` — out of new checks), credited at `consignorShareOf(salePrice,
+splitPercent)`; any remainder between that and `currentBalance` becomes one
+`ADJUSTMENT` line. So a migration that leaves the cutover balance unitemized is fine —
+it shows up as an adjustment on the first post-cutover payout.
 
 ### 4.10 `Device` / `Heartbeat`
 

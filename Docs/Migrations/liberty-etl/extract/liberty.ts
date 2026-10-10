@@ -239,3 +239,29 @@ export async function fetchPayouts(): Promise<PayoutRow[]> {
   `);
   return result.recordset;
 }
+
+export interface PayoutLineRow {
+  PAYOUT_ID: number;
+  ITEM_ID: number | null;
+  TRANS_CD_ID: number;
+  TRANS_CD_DESC: string;
+  ACT_TRANS_DESC: string | null;
+  ACT_TRANS_TS: Date | null;
+  ACT_TRANS_AMT: number | null;
+}
+
+// CLIENT_TRANS rows already settled by a payout (PAYOUT_ID set) — Liberty's own
+// itemization of each check (what its qryCheckDetailReport prints). Signed amounts;
+// each payout's rows sum exactly to PAYOUT.PAYOUT_AMT (verified 2026-10-10: 0 of
+// 55,207 payouts mismatched).
+export async function fetchPayoutLines(): Promise<PayoutLineRow[]> {
+  const pool = await getPool();
+  const result = await pool.request().query(`
+    SELECT t.PAYOUT_ID, t.ITEM_ID, t.TRANS_CD_ID, RTRIM(tc.TRANS_CD_DESC) AS TRANS_CD_DESC,
+           t.ACT_TRANS_DESC, t.ACT_TRANS_TS, t.ACT_TRANS_AMT
+    FROM CLIENT_TRANS t
+    JOIN TRANS_CD tc ON tc.TRANS_CD_ID = t.TRANS_CD_ID
+    WHERE t.PAYOUT_ID <> 0 AND t.CLIENT_ID <> 101508;
+  `);
+  return result.recordset;
+}

@@ -34,6 +34,7 @@ no shared package).
 - `Account` — polymorphic party items/payouts attach to: `accountType ∈ {CONSIGNOR, VENDOR, DONOR, BOOTH_OWNER, STORE}`. Every store has exactly one `STORE`-type account (store-owned inventory) so intake always has a target. `serializeAccount()` (`src/services/accounts.service.ts`) strips `currentBalance` from the API response entirely for non-balance-bearing types (Donor, Store) — not just hidden in the UI. `mailingAddress` (free text, like `Store.location`) and `paymentMethod` have **no current write path** — populated only by direct SQL (e.g. a migration), not reachable via any route or UI today.
 - `Item` — `accountId` is **required** (no intake without an account). `status ∈ {PENDING, AVAILABLE, SOLD, DONATED, DISPOSED, RETURNED}`. `cost` (acquisition cost basis) has **no current write path**, same as `consignmentType`. `sku` is also the barcode value (see below) — POS scan lookup, the printed tag, and the web `Barcode` component all key off it. `itemNumber` is a sequential-per-store counter (`@@unique([storeId, itemNumber])`) that `sku` is derived from.
 - `ItemHistory`, `Photo`, `Sale`, `Payout`, `Device`, `Heartbeat` — as named.
+- `PayoutLine` — itemization of a `Payout`; a `Sale` with a line counts as paid out. See "Accounts" below.
 - `AuditLog` — records `activeRole` alongside `performedById`, not just the user (security-doc requirement: interpret actions strictly in the role that performed them).
 
 ## Auth flow (`src/routes/auth.routes.ts`, `src/services/auth.service.ts`)
@@ -169,6 +170,25 @@ Accounts page's "+ Add Account" modal was added (see `web/CLAUDE.md`'s Pages tab
 `POST /` rejects `accountType: "STORE"` outright (`"STORE accounts are managed
 automatically"`) since every store's `STORE` account is created once, at Setup Wizard
 time — the web only shows the Add button on the other four tabs for that reason.
+
+`GET /` returns every account of a type at once (no paging) — the web filters/sorts
+client-side. It includes `lastSaleAt`, a **denormalized** column POS checkout stamps
+on every sale: computing `MAX(saleDate)` per account live took ~8s even indexed at
+~850k sales (consignors own nearly every item), so don't "simplify" it back into a
+query. Anything that inserts `Sale` rows outside checkout (seed, migrations) must
+backfill it — the `20261010221750` migration's `UPDATE` is the canonical statement.
+
+**Payout itemization.** `PayoutLine` records what each payout covered (signed
+`amount`, `lineType ∈ PAYOUT_LINE_TYPES`, optional `itemId`/`saleId`).
+`GET /:id/payouts/:payoutId` returns one payout with its lines + item + sale. Staff
+`POST /:id/payouts` goes through `generatePaidPayout()` (`services/accounts.service.ts`),
+which writes a `SALE` line per **unpaid** sale — no `PayoutLine` yet *and* sold after
+the account's latest `PAID` payout (the date floor stops migrated sales that the old
+system never itemized from being swept into a new check) — plus one `ADJUSTMENT` line
+for whatever part of `currentBalance` those don't explain, so lines always sum to the
+amount. `consignorShareOf()` there is the one split formula, shared with checkout.
+`POST /me/payouts` (consignor *request*) writes no lines; nothing approves/pays a
+`REQUESTED` payout yet.
 
 ## POS (`src/routes/pos.routes.ts`)
 

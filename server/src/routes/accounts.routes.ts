@@ -5,9 +5,11 @@ import { authenticate } from "../middleware/auth";
 import { requireRole } from "../middleware/requireRole";
 import { recordAudit } from "../lib/audit";
 import { ACCOUNT_TYPES, BALANCE_BEARING_ACCOUNT_TYPES, type AccountType } from "../lib/enums";
-import { serializeAccount } from "../services/accounts.service";
+import { generatePaidPayout, serializeAccount } from "../services/accounts.service";
 
 export const accountsRouter = Router();
+
+const ACCOUNT_DETAIL_ITEM_LIMIT = 500;
 accountsRouter.use(authenticate);
 
 // Staff-only listing/management. Consignor/Vendor/Donor/BoothOwner sessions see their
@@ -34,11 +36,53 @@ accountsRouter.get(
       where: { id: req.params.id, storeId: req.session!.storeId },
     });
     if (!account) return res.status(404).json({ error: "Account not found" });
-    const items = await prisma.item.findMany({ where: { accountId: account.id }, orderBy: { intakeDate: "desc" } });
+    // Newest items only: a migrated STORE account owns hundreds of thousands (~195MB
+    // of JSON uncapped). Full browsing belongs to the Inventory page.
+    const [items, itemCount] = await Promise.all([
+      prisma.item.findMany({ where: { accountId: account.id }, orderBy: { intakeDate: "desc" }, take: ACCOUNT_DETAIL_ITEM_LIMIT }),
+      prisma.item.count({ where: { accountId: account.id } }),
+    ]);
     const payouts = BALANCE_BEARING_ACCOUNT_TYPES.includes(account.accountType as AccountType)
-      ? await prisma.payout.findMany({ where: { accountId: account.id }, orderBy: { createdAt: "desc" } })
+      ? await prisma.payout.findMany({
+          where: { accountId: account.id },
+          orderBy: { createdAt: "desc" },
+          include: { _count: { select: { lines: { where: { itemId: { not: null } } } } } },
+        })
       : [];
-    res.json({ ...serializeAccount(account), items, payouts });
+    res.json({
+      ...serializeAccount(account),
+      items,
+      itemCount,
+      payouts: payouts.map(({ _count, ...p }) => ({ ...p, itemCount: _count.lines })),
+    });
+  }
+);
+
+// One payout, itemized: every PayoutLine with its item and (if linked) sale.
+accountsRouter.get(
+  "/:id/payouts/:payoutId",
+  requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER", "EMPLOYEE"),
+  async (req, res) => {
+    const payout = await prisma.payout.findFirst({
+      where: { id: req.params.payoutId, accountId: req.params.id, account: { storeId: req.session!.storeId } },
+      include: {
+        account: { select: { id: true, name: true, accountType: true } },
+        lines: {
+          include: {
+            item: { select: { id: true, sku: true, description: true, category: true, size: true, price: true } },
+            sale: { select: { id: true, saleDate: true, salePrice: true } },
+          },
+        },
+      },
+    });
+    if (!payout) return res.status(404).json({ error: "Payout not found" });
+    // Chronological by sale where there is one; unattached lines (adjustments) last.
+    payout.lines.sort(
+      (a, b) =>
+        (a.sale?.saleDate.getTime() ?? Infinity) - (b.sale?.saleDate.getTime() ?? Infinity) ||
+        a.lineType.localeCompare(b.lineType)
+    );
+    res.json(payout);
   }
 );
 
@@ -113,10 +157,7 @@ accountsRouter.post(
     }
     const amount = account.currentBalance;
     if (amount <= 0) return res.status(400).json({ error: "No balance available" });
-    const [payout] = await prisma.$transaction([
-      prisma.payout.create({ data: { accountId: account.id, amount, status: "PAID", paidAt: new Date() } }),
-      prisma.account.update({ where: { id: account.id }, data: { currentBalance: 0 } }),
-    ]);
+    const payout = await generatePaidPayout(account);
     await recordAudit(req.session!, "Payout", payout.id, "GENERATE_AND_PAY", { amount });
     res.status(201).json(payout);
   }

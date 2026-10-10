@@ -31,12 +31,13 @@ import {
   fetchInventorySaleDetails,
   fetchPrimarySalePaymentTypes,
   fetchPayouts,
+  fetchPayoutLines,
 } from "../extract/liberty";
 import { closePool } from "../extract/db";
 import { transformClientToAccount, AccountLookups } from "../transform/account";
 import { transformItem, ItemLookups } from "../transform/item";
 import { transformSaleDetail } from "../transform/sale";
-import { transformPayout } from "../transform/payout";
+import { transformPayout, transformPayoutLine } from "../transform/payout";
 import { prisma } from "../load/prisma";
 import { createManyChunked } from "../load/batch";
 import { applyUsersAndRoles } from "../load/users";
@@ -79,6 +80,7 @@ async function main() {
     saleDetails,
     salePaymentTypes,
     payouts,
+    payoutLines,
   ] = await Promise.all([
     fetchStore(),
     fetchOrdinaryClients(),
@@ -97,10 +99,12 @@ async function main() {
     fetchInventorySaleDetails(),
     fetchPrimarySalePaymentTypes(),
     fetchPayouts(),
+    fetchPayoutLines(),
   ]);
   await closePool();
   console.log(
-    `Fetched: ${clients.length} clients, ${items.length} items, ${saleDetails.length} sale lines, ${payouts.length} payouts.`
+    `Fetched: ${clients.length} clients, ${items.length} items, ${saleDetails.length} sale lines, ${payouts.length} payouts, ` +
+      `${payoutLines.length} payout lines.`
   );
 
   // ---- Store + STORE account ----
@@ -224,6 +228,7 @@ async function main() {
   // ---- Sales ----
   const paymentTypeIdBySaleId = new Map(salePaymentTypes.map((p) => [p.SALE_ID, p.PAYMENT_TYPE_ID]));
   const saleRows: any[] = [];
+  const salesByLibertyItemId = new Map<number, { id: string; saleDate: Date }[]>();
   let skippedSalesForUnmigratedItem = 0;
   for (const detail of saleDetails) {
     const itemId = itemIdByLibertyItemId.get(detail.ITEM_ID);
@@ -232,21 +237,44 @@ async function main() {
       continue;
     }
     const t = transformSaleDetail(detail, paymentTypeIdBySaleId);
+    const saleId = newId("sale");
     saleRows.push({
-      id: newId("sale"),
+      id: saleId,
       itemId,
       salePrice: t.salePrice,
       saleDate: t.saleDate,
       paymentType: t.paymentType,
       storeId,
     });
+    const forItem = salesByLibertyItemId.get(detail.ITEM_ID) ?? [];
+    forItem.push({ id: saleId, saleDate: t.saleDate });
+    salesByLibertyItemId.set(detail.ITEM_ID, forItem);
   }
   await createManyChunked((data) => prisma.sale.createMany({ data }), saleRows, 2000, "sales");
   console.log(`Created ${saleRows.length} Sale rows (${skippedSalesForUnmigratedItem} skipped — item not in this batch).`);
 
+  // Account.lastSaleAt — same backfill SQL as the 20261010221750 schema migration.
+  await prisma.$executeRawUnsafe(`
+    UPDATE "Account" SET "lastSaleAt" = (
+      SELECT MAX(s."saleDate") FROM "Item" i JOIN "Sale" s ON s."itemId" = i."id" WHERE i."accountId" = "Account"."id"
+    );`);
+  console.log("Stamped Account.lastSaleAt.");
+
   // ---- Payouts ----
   const payoutRows: any[] = [];
+  const payoutIdByLibertyPayoutId = new Map<number, string>();
   let skippedPayoutsForExcludedOwner = 0;
+  // A SALE line names an item, not a sale; an item sold more than once (sold,
+  // returned, resold) gets the sale closest in time to Liberty's credit transaction.
+  const nearestSaleId = (libertyItemId: number, transTs: Date | null): string | null => {
+    const sales = salesByLibertyItemId.get(libertyItemId);
+    if (!sales?.length) return null;
+    if (sales.length === 1 || !transTs) return sales[0].id;
+    const ts = transTs.getTime();
+    return sales.reduce((best, s) =>
+      Math.abs(s.saleDate.getTime() - ts) < Math.abs(best.saleDate.getTime() - ts) ? s : best
+    ).id;
+  };
   for (const payout of payouts) {
     const accountId = accountIdByClientId.get(payout.CLIENT_ID);
     if (!accountId) {
@@ -254,8 +282,10 @@ async function main() {
       continue;
     }
     const t = transformPayout(payout);
+    const payoutId = newId("payout");
+    payoutIdByLibertyPayoutId.set(payout.PAYOUT_ID, payoutId);
     payoutRows.push({
-      id: newId("payout"),
+      id: payoutId,
       accountId,
       amount: t.amount,
       status: t.status,
@@ -265,6 +295,32 @@ async function main() {
   }
   await createManyChunked((data) => prisma.payout.createMany({ data }), payoutRows, 2000, "payouts");
   console.log(`Created ${payoutRows.length} Payout rows (${skippedPayoutsForExcludedOwner} skipped — excluded owner).`);
+
+  // ---- PayoutLines (Liberty's per-check itemization, CLIENT_TRANS.PAYOUT_ID) ----
+  const payoutLineRows: any[] = [];
+  let skippedLinesForUnmigratedPayout = 0;
+  for (const line of payoutLines) {
+    const payoutId = payoutIdByLibertyPayoutId.get(line.PAYOUT_ID);
+    if (!payoutId) {
+      skippedLinesForUnmigratedPayout++;
+      continue;
+    }
+    const t = transformPayoutLine(line);
+    const itemId = t.libertyItemId != null ? itemIdByLibertyItemId.get(t.libertyItemId) ?? null : null;
+    payoutLineRows.push({
+      id: newId("pline"),
+      payoutId,
+      lineType: t.lineType,
+      itemId,
+      saleId: t.lineType === "SALE" && t.libertyItemId != null ? nearestSaleId(t.libertyItemId, t.transTs) : null,
+      description: t.description,
+      amount: t.amount,
+    });
+  }
+  await createManyChunked((data) => prisma.payoutLine.createMany({ data }), payoutLineRows, 2000, "payout lines");
+  console.log(
+    `Created ${payoutLineRows.length} PayoutLine rows (${skippedLinesForUnmigratedPayout} skipped — payout not in this batch).`
+  );
 
   // ---- Users & UserRoles (config/store.yaml — see its header comment) ----
   const accountIdByName = new Map<string, string>(
