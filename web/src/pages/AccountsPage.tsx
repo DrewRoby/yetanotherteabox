@@ -6,6 +6,7 @@ import { Badge, Button, Card } from "../components/Card";
 import { AccountItems } from "./accounts/AccountItems";
 import { AccountPayouts } from "./accounts/AccountPayouts";
 import { formatDate, money } from "./accounts/format";
+import { Pager, rangeLabel } from "./accounts/Pager";
 
 interface AccountRow {
   id: string;
@@ -31,6 +32,8 @@ const TABS = [
 const CAN_CREATE_ROLES = ["SYSTEM_ADMIN", "OWNER", "MANAGER"];
 
 type SortKey = "name" | "createdAt" | "lastSaleAt" | "lastPayoutAt" | "balance";
+const SORT_KEYS: SortKey[] = ["name", "createdAt", "lastSaleAt", "lastPayoutAt", "balance"];
+const PAGE_SIZE = 50;
 // Dates and balances read most usefully newest/largest first; names A→Z.
 const DEFAULT_DESC: Record<SortKey, boolean> = {
   name: false,
@@ -50,22 +53,28 @@ export function AccountsPage() {
 
 function AccountList() {
   const { user } = useAuth();
-  // Tab and search live in the URL so "← Back to Accounts" from a detail page returns
-  // to the same filtered list instead of resetting to Consignors.
+  // Tab, search, sort and page all live in the URL so "← Back" from a detail page
+  // returns to exactly the same slice of the list.
   const [params, setParams] = useSearchParams();
   const tab = params.get("tab") ?? "CONSIGNOR";
   const query = params.get("q") ?? "";
-  const [sortKey, setSortKey] = useState<SortKey>("name");
-  const [sortDesc, setSortDesc] = useState(false);
+  const sortParam = params.get("sort") as SortKey | null;
+  const sortKey: SortKey = sortParam && SORT_KEYS.includes(sortParam) ? sortParam : "name";
+  const sortDesc = (params.get("dir") ?? (DEFAULT_DESC[sortKey] ? "desc" : "asc")) === "desc";
+  const requestedPage = Math.max(1, Number(params.get("page") ?? 1) || 1);
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
   const [addOpen, setAddOpen] = useState(false);
 
-  function setParam(key: string, value: string) {
+  // Any change but paging itself resets to page 1.
+  function setParam(changes: Record<string, string>) {
     setParams(
       (prev) => {
         const next = new URLSearchParams(prev);
-        if (value) next.set(key, value);
-        else next.delete(key);
+        for (const [key, value] of Object.entries(changes)) {
+          if (value) next.set(key, value);
+          else next.delete(key);
+        }
+        if (!("page" in changes)) next.delete("page");
         return next;
       },
       { replace: true }
@@ -117,12 +126,17 @@ function AccountList() {
   }, [accounts, deferredQuery, sortKey, sortDesc]);
 
   function sortBy(key: SortKey) {
-    if (key === sortKey) setSortDesc(!sortDesc);
-    else {
-      setSortKey(key);
-      setSortDesc(DEFAULT_DESC[key]);
-    }
+    const desc = key === sortKey ? !sortDesc : DEFAULT_DESC[key];
+    setParam({ sort: key === "name" ? "" : key, dir: desc === DEFAULT_DESC[key] ? "" : desc ? "desc" : "asc" });
   }
+
+  // Paging is client-side too: the whole tab is already loaded for instant search, so
+  // this just limits how many rows render. Clamped in case the list shrank (e.g. a
+  // stale ?page= after the search narrowed it).
+  const pages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const page = Math.min(requestedPage, pages);
+  const pageRows = visible.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const goToPage = (p: number) => setParam({ page: p === 1 ? "" : String(p) });
 
   const canCreate = user ? CAN_CREATE_ROLES.includes(user.activeRole) : false;
   const showsBalance = tab !== "DONOR" && tab !== "STORE";
@@ -147,7 +161,7 @@ function AccountList() {
           {TABS.map((t) => (
             <button
               key={t.type}
-              onClick={() => setParam("tab", t.type === "CONSIGNOR" ? "" : t.type)}
+              onClick={() => setParam({ tab: t.type === "CONSIGNOR" ? "" : t.type })}
               className={`px-4 py-2 text-sm font-bold uppercase border-t border-l border-r border-ink -mb-px ${
                 tab === t.type ? "bg-white" : "bg-bone2 text-gray-500"
               }`}
@@ -180,11 +194,11 @@ function AccountList() {
         </p>
       )}
 
-      <div className="flex items-center gap-4 mb-4">
+      <div className="flex flex-wrap items-center gap-4 mb-4">
         <input
           type="search"
           value={query}
-          onChange={(e) => setParam("q", e.target.value)}
+          onChange={(e) => setParam({ q: e.target.value })}
           placeholder="Search by name, email, or phone…"
           aria-label="Search accounts"
           className="w-full max-w-md border border-ink p-2 bg-white"
@@ -192,6 +206,9 @@ function AccountList() {
         <span className="text-xs text-gray-500 whitespace-nowrap">
           {query ? `${visible.length} of ${accounts.length}` : accounts.length} account{accounts.length === 1 ? "" : "s"}
         </span>
+        <div className="ml-auto">
+          <Pager page={page} pages={pages} onPage={goToPage} />
+        </div>
       </div>
 
       <div className="corner-ticks bg-white border border-ink">
@@ -207,7 +224,7 @@ function AccountList() {
               </tr>
             </thead>
             <tbody>
-              {visible.map((a) => (
+              {pageRows.map((a) => (
                 <tr key={a.id} className="border-b border-gray-100 hover:bg-bone/50">
                   <td className="p-3 font-bold">
                     <Link to={`/accounts/${a.id}`} className="hover:text-crimson hover:underline">
@@ -246,6 +263,13 @@ function AccountList() {
           </table>
         </div>
       </div>
+
+      {visible.length > 0 && (
+        <div className="flex justify-between items-center text-xs text-gray-500 mt-2">
+          <span>{rangeLabel(page, PAGE_SIZE, visible.length, !!query)}</span>
+          <Pager page={page} pages={pages} onPage={goToPage} />
+        </div>
+      )}
     </div>
   );
 }

@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../../api/client";
 import { Badge, Button } from "../../components/Card";
 import { formatDate, localDayStartMs, money } from "./format";
+import { Pager, rangeLabel } from "./Pager";
 
 // The account detail page's Payout History: newest first, PAGE_SIZE at a time, with a
 // date range and a search over the descriptions of the items each payout covered.
@@ -98,11 +99,8 @@ export function AccountPayouts({
   const filtersActive = !!(q || from || to);
   const total = data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const first = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
-  const last = Math.min(page * PAGE_SIZE, total);
   const label = "block text-[10px] font-bold uppercase text-gray-500 mb-1";
   const field = "border border-ink p-1.5 bg-white text-sm";
-  const pageBtn = "px-2 py-1 border border-ink bg-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-bone";
   const goTo = (p: number) => update({ [KEYS.page]: p === 1 ? "" : String(p) }, false);
 
   return (
@@ -182,29 +180,13 @@ export function AccountPayouts({
 
       {total > 0 && (
         <div className="flex justify-between items-center text-xs text-gray-500 mt-2">
-          <span>
-            {first.toLocaleString()}–{last.toLocaleString()} of {total.toLocaleString()}
-            {filtersActive ? " matching" : ""}
-          </span>
-          {pages > 1 && (
-            <div className="flex items-center gap-1">
-              <button className={pageBtn} disabled={page <= 1} onClick={() => goTo(1)} aria-label="Newest payouts">
-                «
-              </button>
-              <button className={pageBtn} disabled={page <= 1} onClick={() => goTo(page - 1)} aria-label="Newer payouts">
-                ‹
-              </button>
-              <span className="px-2">
-                Page {page.toLocaleString()} of {pages.toLocaleString()}
-              </span>
-              <button className={pageBtn} disabled={page >= pages} onClick={() => goTo(page + 1)} aria-label="Older payouts">
-                ›
-              </button>
-              <button className={pageBtn} disabled={page >= pages} onClick={() => goTo(pages)} aria-label="Oldest payouts">
-                »
-              </button>
-            </div>
-          )}
+          <span>{rangeLabel(page, PAGE_SIZE, total, filtersActive)}</span>
+          <Pager
+            page={page}
+            pages={pages}
+            onPage={goTo}
+            labels={{ first: "Newest payouts", prev: "Newer payouts", next: "Older payouts", last: "Oldest payouts" }}
+          />
         </div>
       )}
     </section>

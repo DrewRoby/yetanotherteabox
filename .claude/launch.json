@@ -4,25 +4,41 @@
     {
       "name": "server",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--prefix", "server"],
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--prefix",
+        "server"
+      ],
       "port": 4000
     },
     {
       "name": "web",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--prefix", "web"],
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--prefix",
+        "web"
+      ],
       "port": 5173
     },
     {
       "name": "server-alt",
       "runtimeExecutable": "cmd",
-      "runtimeArgs": ["/c", "set PORT=4001&& npm run dev --prefix server"],
+      "runtimeArgs": [
+        "/c",
+        "set PORT=4001&& npm run dev --prefix server"
+      ],
       "port": 4001
     },
     {
       "name": "web-alt",
       "runtimeExecutable": "cmd",
-      "runtimeArgs": ["/c", "set API_PROXY_TARGET=http://localhost:4001&& npm run dev --prefix web -- --port 5174 --strictPort"],
+      "runtimeArgs": [
+        "/c",
+        "set API_PROXY_TARGET=http://localhost:4001&& npm run dev --prefix web -- --port 5174 --strictPort"
+      ],
       "port": 5174
     }
   ]

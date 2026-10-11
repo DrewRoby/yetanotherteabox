@@ -229,6 +229,24 @@ ids with one raw join scoped to the account — Prisma's `lines: { some: { item:
 scanned every `PayoutLine` in the store (~7s on migrated data) — and leans on
 `Payout @@index([accountId, createdAt])`; ~100ms for the busiest migrated consignor.
 
+## Item edit / delete (`src/routes/items.routes.ts`)
+
+`PATCH /items/:id` (staff) edits any subset of an item's fields and records each change
+in its history the way the dedicated routes do — `PRICE_CHANGE`, `STATUS_CHANGE`, plus
+one `EDIT` entry listing other changed fields (`brand: — → Pyrex; account: A → B`) — and
+one `EDIT` audit entry with full before/after. Rules: price fields and `accountId` need
+Manager+ (same split as `PUT /:id/price`); `SOLD` can't be set by hand (only POS
+checkout records a sale); a `SOLD` item's price, status and account are frozen (409) —
+its `Sale` and the account credit were recorded against them — but its descriptive
+fields stay editable. Moving an unsold item between accounts is safe because balances
+are only credited at sale time.
+
+`DELETE /items/:id` (Manager+) hard-deletes the item with its history and photos, for
+mistaken/duplicate intakes, and is **refused (409) once the item has any `Sale` or
+`PayoutLine`** — mark it `DISPOSED` instead. The `DELETE` audit entry keeps a snapshot.
+`GET /items/:id` includes `sales` and `_count.payoutLines` so the page knows these
+limits up front.
+
 ## POS (`src/routes/pos.routes.ts`)
 
 `GET /lookup?code=` exact SKU match. `GET /inventory-search?q=&category=&size=&brand=`

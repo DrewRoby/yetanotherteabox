@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../../api/client";
 import { Badge, Button } from "../../components/Card";
 import { formatDate, localDayStartMs, money } from "./format";
+import { Pager, rangeLabel } from "./Pager";
 
 // The account detail page's Items table. Filtering, sorting and paging all happen
 // server-side (GET /accounts/:id/items) — an account can own ~340k items. Every
@@ -128,8 +129,6 @@ export function AccountItems({
   const filtersActive = FILTER_KEYS.some((k) => get(k));
   const total = data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const first = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
-  const last = Math.min(page * PAGE_SIZE, total);
 
   const label = "block text-[10px] font-bold uppercase text-gray-500 mb-1";
   const field = "border border-ink p-1.5 bg-white text-sm";
@@ -214,8 +213,7 @@ export function AccountItems({
 
       <div className="flex justify-between items-center text-xs text-gray-500 mb-2">
         <span>
-          {data ? `${first.toLocaleString()}–${last.toLocaleString()} of ${total.toLocaleString()}` : ""}
-          {filtersActive && data ? " matching" : ""}
+          {data ? rangeLabel(page, PAGE_SIZE, total, filtersActive) : ""}
           {loading && <span className="ml-2 italic">Loading…</span>}
         </span>
         <Pager page={page} pages={pages} onPage={(p) => update({ page: p === 1 ? "" : String(p) }, false)} />
@@ -284,29 +282,5 @@ export function AccountItems({
         </div>
       )}
     </section>
-  );
-}
-
-function Pager({ page, pages, onPage }: { page: number; pages: number; onPage: (p: number) => void }) {
-  if (pages <= 1) return null;
-  const btn = "px-2 py-1 border border-ink bg-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-bone";
-  return (
-    <div className="flex items-center gap-1 text-xs">
-      <button className={btn} disabled={page <= 1} onClick={() => onPage(1)} aria-label="First page">
-        «
-      </button>
-      <button className={btn} disabled={page <= 1} onClick={() => onPage(page - 1)} aria-label="Previous page">
-        ‹
-      </button>
-      <span className="px-2">
-        Page {page.toLocaleString()} of {pages.toLocaleString()}
-      </span>
-      <button className={btn} disabled={page >= pages} onClick={() => onPage(page + 1)} aria-label="Next page">
-        ›
-      </button>
-      <button className={btn} disabled={page >= pages} onClick={() => onPage(pages)} aria-label="Last page">
-        »
-      </button>
-    </div>
   );
 }

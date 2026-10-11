@@ -45,6 +45,10 @@ itemsRouter.get("/:id", async (req, res) => {
       account: true,
       photos: true,
       history: { orderBy: { timestamp: "desc" } },
+      // Lets the detail page show the sale and know up front what PATCH/DELETE
+      // will refuse (sold items' price/status/account; any financial record).
+      sales: { select: { id: true, saleDate: true, salePrice: true }, orderBy: { saleDate: "desc" } },
+      _count: { select: { payoutLines: true } },
     },
   });
   if (!item) return res.status(404).json({ error: "Item not found" });
@@ -256,3 +260,141 @@ itemsRouter.put(
     res.json(updated);
   }
 );
+
+// ---- Item detail page: edit / delete ----
+
+const STAFF_ROLES = ["SYSTEM_ADMIN", "OWNER", "MANAGER", "EMPLOYEE"] as const;
+// Same split as PUT /:id/price: Employees may fix an item's description and status,
+// but repricing it or moving it to another account (whose split it's credited at)
+// takes a Manager or above.
+const PRICE_AND_ACCOUNT_ROLES = ["SYSTEM_ADMIN", "OWNER", "MANAGER"] as const;
+// SOLD is only ever set by POS checkout (which records the Sale and credits the
+// account) — never by hand.
+const EDITABLE_STATUSES = ITEM_STATUSES.filter((s) => s !== "SOLD") as [string, ...string[]];
+
+const optionalText = z.string().trim().max(500).nullable().optional(); // null/"" clears the field
+const itemEditSchema = z
+  .object({
+    description: z.string().trim().min(1).max(500).optional(),
+    category: z.string().trim().min(1).max(100).optional(),
+    subcategory: optionalText,
+    brand: optionalText,
+    style: optionalText,
+    pattern: optionalText,
+    size: optionalText,
+    serialNumber: optionalText,
+    condition: optionalText,
+    price: z.number().positive().optional(),
+    priceQuickSale: z.number().positive().nullable().optional(),
+    pricePremium: z.number().positive().nullable().optional(),
+    status: z.enum(EDITABLE_STATUSES).optional(),
+    accountId: z.string().min(1).optional(),
+  })
+  .strict();
+
+const TEXT_FIELDS = ["description", "category", "subcategory", "brand", "style", "pattern", "size", "serialNumber", "condition"] as const;
+const money = (n: number | null | undefined) => (n == null ? "—" : `$${n.toFixed(2)}`);
+
+// Edits whatever subset of fields is sent. Each kind of change lands in the item's
+// history the way the dedicated routes already record it (PRICE_CHANGE /
+// STATUS_CHANGE) plus one EDIT entry listing any other changed fields, and one audit
+// entry with the full before/after. A SOLD item's price, status and account are
+// frozen — its Sale and the account's credit were recorded against them.
+itemsRouter.patch("/:id", requireRole(...STAFF_ROLES), async (req, res) => {
+  const parsed = itemEditSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const session = req.session!;
+  const item = await prisma.item.findFirst({ where: { id: req.params.id, storeId: session.storeId } });
+  if (!item) return res.status(404).json({ error: "Item not found" });
+  const input = parsed.data;
+
+  const priceFields = (["price", "priceQuickSale", "pricePremium"] as const).filter(
+    (f) => input[f] !== undefined && input[f] !== item[f]
+  );
+  const accountChanged = input.accountId !== undefined && input.accountId !== item.accountId;
+  const statusChanged = input.status !== undefined && input.status !== item.status;
+
+  if ((priceFields.length || accountChanged) && !(PRICE_AND_ACCOUNT_ROLES as readonly string[]).includes(session.activeRole)) {
+    return res.status(403).json({ error: "Only a Manager, Owner or Admin can change an item's price or account" });
+  }
+  if (item.status === "SOLD" && (priceFields.length || accountChanged || statusChanged)) {
+    return res.status(409).json({
+      error: "This item has been sold — its price, status and account are fixed by the sale. Only its description details can be edited.",
+    });
+  }
+  let accountNote = "";
+  if (accountChanged) {
+    const target = await prisma.account.findFirst({ where: { id: input.accountId, storeId: session.storeId } });
+    if (!target) return res.status(400).json({ error: "That account doesn't belong to this store" });
+    const current = await prisma.account.findUniqueOrThrow({ where: { id: item.accountId }, select: { name: true } });
+    accountNote = `account: ${current.name} → ${target.name}`;
+  }
+
+  const data: Record<string, unknown> = {};
+  const before: Record<string, unknown> = {};
+  const editNotes: string[] = [];
+  for (const f of TEXT_FIELDS) {
+    if (input[f] === undefined) continue;
+    const next = input[f] === "" ? null : input[f];
+    if (next === item[f]) continue;
+    data[f] = next;
+    before[f] = item[f];
+    editNotes.push(`${f}: ${item[f] ?? "—"} → ${next ?? "—"}`);
+  }
+  for (const f of priceFields) {
+    data[f] = input[f];
+    before[f] = item[f];
+    if (f !== "price") editNotes.push(`${f}: ${money(item[f])} → ${money(input[f])}`);
+  }
+  if (statusChanged) {
+    data.status = input.status;
+    before.status = item.status;
+  }
+  if (accountChanged) {
+    data.accountId = input.accountId;
+    before.accountId = item.accountId;
+    editNotes.push(accountNote);
+  }
+  if (Object.keys(data).length === 0) return res.json(item);
+
+  const history = [
+    ...(priceFields.includes("price")
+      ? [{ changeType: "PRICE_CHANGE", oldValue: money(item.price), newValue: money(input.price) }]
+      : []),
+    ...(statusChanged ? [{ changeType: "STATUS_CHANGE", oldValue: item.status, newValue: input.status! }] : []),
+    ...(editNotes.length ? [{ changeType: "EDIT", oldValue: null, newValue: editNotes.join("; ") }] : []),
+  ].map((h) => ({ ...h, changedById: session.sub, activeRole: session.activeRole }));
+
+  const updated = await prisma.item.update({
+    where: { id: item.id },
+    data: { ...data, history: { create: history } },
+  });
+  await recordAudit(session, "Item", item.id, "EDIT", { before, after: data });
+  res.json(updated);
+});
+
+// Hard delete, for mistakes (a duplicate or test intake). Refused once the item has
+// any financial record — a Sale or a PayoutLine — since removing it would leave a
+// sale or a payout pointing at nothing; mark such an item DISPOSED instead. The audit
+// entry keeps a snapshot of what was deleted.
+itemsRouter.delete("/:id", requireRole(...PRICE_AND_ACCOUNT_ROLES), async (req, res) => {
+  const session = req.session!;
+  const item = await prisma.item.findFirst({
+    where: { id: req.params.id, storeId: session.storeId },
+    include: { _count: { select: { sales: true, payoutLines: true } } },
+  });
+  if (!item) return res.status(404).json({ error: "Item not found" });
+  if (item._count.sales || item._count.payoutLines) {
+    return res.status(409).json({
+      error: "This item has sale or payout records, so it can't be deleted. Set its status to Disposed instead.",
+    });
+  }
+  const { _count, ...snapshot } = item;
+  await prisma.$transaction([
+    prisma.itemHistory.deleteMany({ where: { itemId: item.id } }),
+    prisma.photo.deleteMany({ where: { itemId: item.id } }),
+    prisma.item.delete({ where: { id: item.id } }),
+  ]);
+  await recordAudit(session, "Item", item.id, "DELETE", { snapshot });
+  res.status(204).end();
+});
