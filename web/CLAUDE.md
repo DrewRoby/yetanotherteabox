@@ -1,7 +1,8 @@
 # web/
 
 React + TypeScript + Vite + Tailwind. Dev: `npm run dev` (:5173, proxies `/api` to
-`:4000`). Ming Dynasty theme tokens in `tailwind.config.js`: `crimson #b91c1c`,
+`:4000`, or to `API_PROXY_TARGET` if set — `.claude/launch.json`'s `server-alt`/`web-alt`
+run a second stack on :4001/:5174 beside a running `teabox.exe` holding :4000). Ming Dynasty theme tokens in `tailwind.config.js`: `crimson #b91c1c`,
 `crimson2 #a62c2b`, `gold #d4af37`, `ink #1a1a1a`, `bone #f8f3e7`. Shared visual
 primitives (`Card`, `StatCard`, `Badge`, `Button`, the gold corner-tick decoration) in
 `src/components/Card.tsx` / `.corner-ticks` in `src/index.css`.
@@ -38,17 +39,17 @@ the two apps — update both if roles change).
 
 | Path | Component | Roles | Notes |
 |---|---|---|---|
-| `/setup` | `SetupWizardPage` | none (pre-auth) | 3-step: Welcome → Shop → Owner. Blocked once `needsSetup` is false. |
+| `/setup` | `SetupWizardPage` | none (pre-auth) | 3-step: Welcome → Shop → Owner. Blocked once `needsSetup` is false. The Shop step has optional item-tag prefix / first-number fields (blank = TBX from 1). |
 | `/login` | `LoginPage` | none | Handles the multi-role picker step inline. Also badge sign-in: a scan into the autofocused Email field (value starting `TBXB-` + Enter) is routed to `/auth/badge-login`, as is the explicit "Or scan your badge" field / Camera button. |
 | `/dashboard` | `DashboardPage` | staff | Role-specific widgets from `/reports/dashboard`. |
 | `/inventory`, `/inventory/:id` | `InventoryPage`, `ItemDetailPage` | staff | |
 | `/intake` | `IntakePage` | staff + Consignor/Booth Owner | Locked "Intake For" card vs. required account `<select>` — mirrors `resolveIntakeAccountId` server-side. Saving queues a tag into the "Tag Batch" panel instead of printing immediately — see "Ticket printing" below. |
 | `/pos` | `PosPage` | staff + Register | Scan input + "Search Inventory" modal (tagless items) + camera scanner (`components/BarcodeScanner.tsx`, lazy-loaded) + checkout. |
-| `/accounts`, `/accounts/:id`, `/accounts/:id/payouts/:payoutId` | `AccountsPage` (→ `AccountList` / `AccountDetail` / `PayoutDetail`) | staff | Tabbed by `accountType`; Donor tab never renders a balance column. Search box filters the loaded tab client-side on every keystroke (name/email/phone; `useDeferredValue` keeps typing smooth over ~3.5k rows); column headers sort. Tab + search live in the URL (`?tab=&q=`) so detail pages' "← Back" returns to the same filtered list. Email is searchable but deliberately not a column. Account detail lists payout history; each payout opens `PayoutDetail`, its itemized `PayoutLine`s (see `server/CLAUDE.md`'s "Accounts"). "+ Add Account" (Owner/Manager/Admin only, hidden on the Store tab) opens a modal posting to the pre-existing `POST /accounts`. |
+| `/accounts`, `/accounts/:id`, `/accounts/:id/payouts/:payoutId` | `AccountsPage` (→ `AccountList` / `AccountDetail` / `PayoutDetail`) | staff | Tabbed by `accountType`; Donor tab never renders a balance column. Search box filters the loaded tab client-side on every keystroke (name/email/phone; `useDeferredValue` keeps typing smooth over ~3.5k rows); column headers sort. Tab + search live in the URL (`?tab=&q=`) so detail pages' "← Back" returns to the same filtered list. Email is searchable but deliberately not a column. "Latest Payout" (balance-bearing tabs; newest non-`REJECTED` payout, computed live by `GET /accounts`) links to `/accounts/:id#payouts`, which `AccountDetail` scrolls to once loaded. Account detail's payout history is `pages/accounts/AccountPayouts.tsx` — 5 per page via `GET /accounts/:id/payouts`, date range + search over the paid-out items' descriptions, controls in the URL under `p`-prefixed keys (`pq`/`pfrom`/`pto`/`ppage`) so they don't collide with the item table's; each payout opens `PayoutDetail`, its itemized `PayoutLine`s (see `server/CLAUDE.md`'s "Accounts"). Its item table is `pages/accounts/AccountItems.tsx`: server-side filter/sort/paging via `GET /accounts/:id/items`, every control in the URL; date filters are converted to local-midnight epoch ms client-side (root `CLAUDE.md`'s local-vs-UTC gotcha). The Store tab lists the built-in STORE account ("Built-in" badge) plus `isStoreAccount` accounts; Owner/Manager/Admin toggle that flag on the account page (server refuses while a balance is owed) or tick it in "+ Add Account" (Owner/Manager/Admin only, hidden on the Store tab). |
 | `/portal` | `ConsignorPortalPage` | Consignor/Vendor/Donor | Self-service, own account only (`/accounts/me/profile`). |
 | `/booth-pricing` | `BoothOwnerPricingPage` | Booth Owner (own items) + Manager/Owner (pick a booth) | Inline price edits + bulk % adjustment. |
 | `/reports` | `ReportsPage` | Manager/Owner/Admin | Daily sales, aging, payouts; CSV export via raw `fetch` (blob download, not the JSON api client). Plus two tools in `pages/reports/`: **Employee Sign-In Sheet** (`SignInSheet.tsx` — issues/rotates/revokes scan-to-login badges and prints them; plaintext codes exist only in component state while the sheet is on screen) and **Barcode Generator** (`BarcodeGenerator.tsx` — any text → PNG, fully client-side). Both offer Code128 or QR via `lib/codeImage.ts`. |
-| `/settings` | `SettingsPage` | Manager/Owner/Admin | Tabbed; Users & Permissions restricted further to Owner/Admin inside the page. |
+| `/settings` | `SettingsPage` | Manager/Owner/Admin | Tabbed; Users & Permissions restricted further to Owner/Admin inside the page. Store tab: item-tag prefix + starting number with a live "Next item" preview — editable by Owner/Admin, read-only for Managers (see `server/CLAUDE.md`'s "Barcode values"). |
 
 ## Barcode scanning (`PosPage`'s "Scan Input")
 

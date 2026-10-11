@@ -1,4 +1,4 @@
-<!-- migration-spec-freshness: schema.prisma=ea18333d enums.ts=770b0724 -->
+<!-- migration-spec-freshness: schema.prisma=98bfe593 enums.ts=770b0724 -->
 # Teabox ERP — Data Model Migration Spec (SQL Server source)
 
 Status: **living document**. Update this file whenever the Prisma schema
@@ -171,6 +171,14 @@ instead (see the `ITEM` section), confirming §3's general guidance not to force
   `Account.currentBalance = SUM(CLIENT_TRANS.ACT_TRANS_AMT)` for that `CLIENT_ID`,
   **restricted to rows whose `TRANS_CD.PAYABLE_IND = 1`** (excludes `-1`/pending and
   `0`/non-cash rows — see the `CLIENT_TRANS`/`TRANS_CD` section below).
+- `CREATE_TS` → `Account.createdAt` (the Accounts list's "Created" column — without it,
+  every migrated account shows the migration date). 1 `NULL` (`CLIENT_ID 3`) falls back
+  to `ACTIVE_TS`, then `LAST_UPDATE_TS`. **Caveat**: 1,364 of 3,608 migrated clients
+  (~38%) share `CREATE_TS = 2002-08-23 00:00:00`, the table's earliest value — evidently
+  when the shop's pre-existing clients were first loaded into Liberty, not their real
+  sign-up dates (no client's first item predates its `CREATE_TS` by more than a day,
+  consistent with that). Migrated as-is: it's the best date Liberty has, and reads
+  correctly as "on file since Liberty began."
 - `NEXT_ITEM_NUM` confirms Liberty's item numbers are account-scoped, not shop-wide
   unique, exactly as this spec already warned generically (see the `ITEM`/SKU note).
 
@@ -377,6 +385,7 @@ beyond `NOT NULL` and `UNIQUE`) / migration guidance.
 |---|---|---|---|
 | `id` | `String` (cuid) | PK | Generate a fresh cuid per target row; do not reuse source IDs (see §7.3). |
 | `name` | `String` | required | |
+| `itemPrefix` / `itemStartNumber` | `String` / `Int` | defaults `"TBX"` / `1` | New Teabox items are tagged `<itemPrefix>-<number>`, numbered one past the store's highest `Item.itemNumber` but never below `itemStartNumber`. Set them so post-migration tags are visibly distinct from migrated ones — Hidden Treasures: `HT`, start `2000000` (`store.yaml` `items.startNumber: auto` = next round number above Liberty's highest `ITEM_ID`, 1,162,674). |
 | `location` | `String?` | optional | Free text, e.g. `"Springfield, IL"` in seed data — no structured address fields exist. If the source has structured address columns, concatenate; don't add columns without a schema migration. |
 | `createdAt` | `DateTime` | default now | Set to the source shop's actual founding/go-live date if known and meaningful for reporting; otherwise migration date is fine — nothing keys off it besides display. |
 
@@ -389,6 +398,7 @@ One `Store` row per physical location (§2).
 | `id` | `String` (cuid) | PK | Fresh cuid. |
 | `storeId` | `String` | FK, required | |
 | `accountType` | `String` | must be one of `ACCOUNT_TYPES` | See §3 crosswalk. |
+| `isStoreAccount` | `Boolean` | default `false`; only meaningful on `CONSIGNOR`/`VENDOR`/`BOOTH_OWNER` | Marks one of the shop's *own* accounts kept separate from the single built-in `STORE` account (e.g. Liberty's per-year "20XX Inventory" buckets). Store-owned rules apply — `isBalanceBearing()` (`server/src/services/accounts.service.ts`) is false, so no balance credits, no new payouts, balance stripped from the API — **so `currentBalance` must be `0`** (validated). Historical `Payout` rows on a flagged account are fine and stay visible. Lists under the Accounts page's Store tab. |
 | `name` | `String` | required | Person/business/booth display name. |
 | `email` | `String?` | optional, no uniqueness constraint at DB level | Note: this is **separate** from `User.email` (which *is* unique) — an `Account` (the financial party) and a `User` (a login) are different rows even when the same person is both. Don't conflate them during migration; see §4.3. |
 | `phone` | `String?` | optional | |
@@ -452,8 +462,8 @@ Settings → Users & Permissions (`DELETE /settings/users/roles/:userRoleId`).
 | Field | Type | Constraints | Notes |
 |---|---|---|---|
 | `id` | `String` (cuid) | PK | Fresh cuid — but see §7.3 on preserving the source ID for cross-reference. |
-| `sku` | `String` | **unique**, required | Also the value encoded onto the printed barcode tag (`web/src/components/Barcode.tsx`) and matched on POS scan lookup. If the source system's SKU/tag numbers are themselves unique per shop, reuse them verbatim (better for staff continuity — physical tags already printed with old SKUs stay valid). If the source allows SKU reuse across time (e.g. recycled tag numbers) or the format collides with Teabox's own generator (`formatBarcode()`, `server/src/lib/barcode.ts` — `${storeId}-${itemNumber}`), namespace migrated SKUs distinctly (e.g. a prefix) to guarantee no future auto-generated SKU collides with a migrated one. |
-| `itemNumber` | `Int` | **required**, unique per `storeId` (`@@unique([storeId, itemNumber])`) | Sequential per-store counter `formatBarcode()` encodes into `sku` for *new* items; migrated items don't need it to match their migrated `sku` at all (that's just carried over verbatim), but it still must be populated with some store-unique integer — e.g. a per-store row-number over intake order, the same backfill strategy `prisma/migrations/20260915011122_add_item_number/migration.sql` used for pre-existing rows when this column was added. |
+| `sku` | `String` | **unique**, required | Also the value encoded onto the printed barcode tag (`web/src/components/Barcode.tsx`) and matched on POS scan lookup. If the source system's SKU/tag numbers are themselves unique per shop, reuse them verbatim (better for staff continuity — physical tags already printed with old SKUs stay valid). If the source allows SKU reuse across time (e.g. recycled tag numbers) or the format collides with Teabox's own generator (`formatBarcode()`, `server/src/lib/barcode.ts` — `${Store.itemPrefix}-${itemNumber}`), namespace migrated SKUs distinctly (e.g. a prefix) so they're recognizable. |
+| `itemNumber` | `Int` | **required**, unique per `storeId` (`@@unique([storeId, itemNumber])`) | **Must equal the number encoded in the item's `sku`** (Liberty: `itemNumber = ITEM_ID` for `LIB-<ITEM_ID>`). New items take one past the store's highest `itemNumber` (floor `Store.itemStartNumber`), and that's only collision-free if every existing SKU encodes its own number. Not required to be gapless. (Before 2026-10-11 it had to be gapless 1..N, because intake used `count + 1`.) |
 | `description` | `String` | required | |
 | `category` | `String` | required, free text (no enum) | No longer feeds SKU generation (that now comes from `itemNumber`, not `category`); purely descriptive/filterable metadata. |
 | `subcategory`, `brand`, `style`, `pattern`, `size`, `serialNumber`, `condition` | `String?` | all optional free text | Direct 1:1 mapping from whatever equivalent columns the source has; leave `null` rather than empty string for anything absent (the intake `zod` schema treats these as `optional()`, not empty-string-required). |
@@ -523,6 +533,7 @@ live-transaction endpoint, not a ledger-replay one.**
 | Field | Type | Constraints | Notes |
 |---|---|---|---|
 | `id` | `String` (cuid) | PK | |
+| `payoutNumber` | `Int` | required, **unique** (globally — `Payout` has no `storeId`) | The human-facing "Payout #". Carry the source system's own payout/check number over when it has one (Liberty: `PAYOUT.PAYOUT_ID`), so staff can match old paperwork; new payouts continue at `max + 1` (`nextPayoutNumber()`). Without a source number, number chronologically (the `add_payout_number` schema migration's `ROW_NUMBER()` backfill). |
 | `accountId` | `String` | FK → `Account`; **should only reference `BALANCE_BEARING_ACCOUNT_TYPES` accounts** (`CONSIGNOR`/`VENDOR`/`BOOTH_OWNER`) | Not DB-enforced, but `accounts.routes.ts:111-113` refuses to create new payouts against `DONOR`/`STORE` accounts — don't migrate historical payout rows against those account types either, even if the source data has something superficially similar (e.g. a "donation acknowledgment sent" record — that's not a `Payout`). |
 | `amount` | `Float` | required, positive | |
 | `status` | `String` | one of `PAYOUT_STATUSES` (`REQUESTED`, `APPROVED`, `PAID`, `REJECTED`) | Historical payouts are almost always `PAID`; only use `REQUESTED`/`APPROVED` for genuinely open-as-of-cutover requests. |
@@ -800,6 +811,12 @@ direct owner sign-off, since a live consult with Sherry wasn't available this ro
 worth a real confirmation with her before treating these as permanent):
 - The ~46 `CLIENT_TYPE_ID = 3` accounts: **excluded entirely** from this migration
   (same as the prior test run) — see the now-answered `reports/client_type_3_review.md`.
+  **Superseded 2026-10-11** (decided with the project owner): Teabox gained
+  `Account.isStoreAccount`, and every type-3 client now migrates as a `CONSIGNOR` with
+  that flag set — items, sales and payout history included, Liberty ledger balance
+  dropped to 0 (store-owned accounts are never owed money). The few that are really
+  vendors or people get unflagged by staff in the app (owner/manager toggle on the
+  account page; refused while a balance is owed).
 - `CLIENT_ID 101508` (~$2B corrupted balance): **excluded entirely**, not zeroed —
   neither the account, its items, nor its payouts were migrated.
 - `PAYOUT.RECONCILE_STATUS` crosswalk: used **as documented** (`P`/`R` → `PAID`,
@@ -820,10 +837,13 @@ project-side on 2026-09-07 to unblock the real migration (see §8's status note)
 
 - **The `CLIENT_TYPE_ID = 3` ("Store Account") bucket mixes at least three different
   real meanings** (§3.1) — year-named store-inventory placeholders, real vendor
-  product lines, and real individual consignors with a fee-waiver note. **Decided:
-  excluded entirely from the migration** rather than guessed at — `reports/client_type_3_review.md`
-  still has the full ~46-name list for whenever Sherry can sort it; re-running a
-  follow-up load for just those accounts is straightforward once she does.
+  product lines, and real individual consignors with a fee-waiver note. **Decided
+  (2026-10-11, replacing the 2026-09-07 exclusion): migrated, all flagged
+  `isStoreAccount`** — the safe default, since a flagged account is never owed money.
+  `reports/client_type_3_review.md` still lists which ones look like real vendors or
+  people (e.g. Laser Pegs, Mary Parker, Betty McLane-Iles) for Sherry to confirm and
+  staff to unflag in the app. Their Liberty balances were dropped, so any that *were*
+  owed money need that settled by hand after unflagging.
 - **`CLIENT_ID 101508`'s ~$2 billion ledger balance is corrupted** (§3.1). **Decided:
   excluded entirely** (account, items, and payouts) rather than zeroed or
   hand-corrected — same reasoning as above, pending Sherry's memory of what happened.

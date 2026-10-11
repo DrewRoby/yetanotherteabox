@@ -25,19 +25,22 @@ export interface LibertyClientRow {
   COMPANY_NAME: string | null;
   DEF_PRICE_CODE_ID: number | null;
   PAYMENT_ACT_ID: number | null;
+  CREATE_TS: Date | null;
+  ACTIVE_TS: Date | null;
+  LAST_UPDATE_TS: Date | null;
 }
 
-// CLIENT_TYPE_ID 1 = "Client" (-> CONSIGNOR), 2 = "Retail Vendor" (-> VENDOR).
-// CLIENT_TYPE_ID 3 ("Store Account") is excluded — see client_type_3_review.md,
-// pending the shop owner's sort. CLIENT_ID 101508 is excluded — corrupted ledger
-// balance (~$2B), see spec §3.1.
+// CLIENT_TYPE_ID 1 = "Client" (-> CONSIGNOR), 2 = "Retail Vendor" (-> VENDOR),
+// 3 = "Store Account" (-> CONSIGNOR flagged isStoreAccount — decided 2026-10-11; staff
+// unflag any that turn out to be real vendors/people, see client_type_3_review.md).
+// CLIENT_ID 101508 is excluded — corrupted ledger balance (~$2B), see spec §3.1.
 export async function fetchOrdinaryClients(): Promise<LibertyClientRow[]> {
   const pool = await getPool();
   const result = await pool.request().query(`
     SELECT CLIENT_ID, CLIENT_TYPE_ID, FIRST_NAME, LAST_NAME, COMPANY_NAME,
-           DEF_PRICE_CODE_ID, PAYMENT_ACT_ID
+           DEF_PRICE_CODE_ID, PAYMENT_ACT_ID, CREATE_TS, ACTIVE_TS, LAST_UPDATE_TS
     FROM CLIENT
-    WHERE CLIENT_TYPE_ID IN (1, 2) AND CLIENT_ID <> 101508;
+    WHERE CLIENT_TYPE_ID IN (1, 2, 3) AND CLIENT_ID <> 101508;
   `);
   return result.recordset;
 }

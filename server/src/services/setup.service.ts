@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs";
 import { prisma } from "../lib/prisma";
 import { beginSession } from "./auth.service";
 import { getOrCreateStoreAccount } from "./accounts.service";
+import { ITEM_PREFIX_PATTERN } from "../lib/barcode";
 
 export async function needsSetup(): Promise<boolean> {
   const storeCount = await prisma.store.count();
@@ -14,6 +15,8 @@ export interface CompleteSetupInput {
   ownerName: string;
   ownerEmail: string;
   password: string;
+  itemPrefix?: string;
+  itemStartNumber?: number;
 }
 
 // One-time bootstrap for a brand-new deployment: creates the store, its owner
@@ -29,7 +32,12 @@ export async function completeSetup(input: CompleteSetupInput) {
   const passwordHash = await bcrypt.hash(input.password, 10);
 
   const store = await prisma.store.create({
-    data: { name: input.storeName, location: input.storeLocation },
+    data: {
+      name: input.storeName,
+      location: input.storeLocation,
+      ...(input.itemPrefix ? { itemPrefix: input.itemPrefix } : {}),
+      ...(input.itemStartNumber ? { itemStartNumber: input.itemStartNumber } : {}),
+    },
   });
   await getOrCreateStoreAccount(store.id);
 
@@ -79,10 +87,21 @@ export async function maybeAutoCompleteSetup(): Promise<void> {
     return;
   }
 
+  // Optional; an invalid value is reported and the default used, rather than blocking
+  // setup over item numbering (it's editable afterwards in Settings > Store).
+  const rawPrefix = process.env.SETUP_ITEM_PREFIX?.trim().toUpperCase();
+  const itemPrefix = rawPrefix && ITEM_PREFIX_PATTERN.test(rawPrefix) ? rawPrefix : undefined;
+  if (rawPrefix && !itemPrefix) console.warn(`Ignoring SETUP_ITEM_PREFIX="${rawPrefix}": use 1–8 letters/digits.`);
+  const rawStart = process.env.SETUP_ITEM_START?.trim();
+  const itemStartNumber = rawStart && /^[1-9]d*$/.test(rawStart) ? Number(rawStart) : undefined;
+  if (rawStart && !itemStartNumber) console.warn(`Ignoring SETUP_ITEM_START="${rawStart}": use a positive whole number.`);
+
   try {
     await completeSetup({
       storeName: storeName!,
       storeLocation: process.env.SETUP_STORE_LOCATION,
+      itemPrefix,
+      itemStartNumber,
       ownerName: ownerName!,
       ownerEmail: ownerEmail!,
       password: password!,

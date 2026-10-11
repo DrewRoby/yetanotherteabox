@@ -1,4 +1,6 @@
+import type { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma";
+import { formatBarcode } from "../lib/barcode";
 import { ACCOUNT_SCOPED_ROLES, type Role } from "../lib/enums";
 import type { SessionClaims } from "../lib/jwt";
 import { getOrCreateStoreAccount } from "./accounts.service";
@@ -35,6 +37,23 @@ export async function resolveIntakeAccountId(
 }
 
 export class IntakeAccountError extends Error {}
+
+// The itemNumber + sku for a store's next new item: one past the store's highest
+// itemNumber, but never below Store.itemStartNumber, with Store.itemPrefix. Because
+// every SKU encodes its own item's number (formatBarcode), max + 1 can't collide with
+// any existing SKU — under any prefix, including a migrated "LIB-" one — and lowering
+// itemStartNumber later can't move numbering backwards. Call inside the same
+// interactive transaction as the create: SQLite serializes writer transactions, so
+// the read-then-create is race-free.
+export async function nextItemIdentity(tx: Prisma.TransactionClient, storeId: string) {
+  const store = await tx.store.findUniqueOrThrow({
+    where: { id: storeId },
+    select: { itemPrefix: true, itemStartNumber: true },
+  });
+  const { _max } = await tx.item.aggregate({ where: { storeId }, _max: { itemNumber: true } });
+  const itemNumber = Math.max((_max.itemNumber ?? 0) + 1, store.itemStartNumber);
+  return { itemNumber, sku: formatBarcode(store.itemPrefix, itemNumber) };
+}
 
 export async function ensureStoreAccountSeeded(storeId: string) {
   return getOrCreateStoreAccount(storeId);

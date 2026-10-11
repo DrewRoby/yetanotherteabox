@@ -20,6 +20,7 @@ export interface AccountLookups {
 export interface TransformedAccount {
   libertyClientId: number;
   accountType: "CONSIGNOR" | "VENDOR";
+  isStoreAccount: boolean;
   name: string;
   phone: string | null;
   email: string | null;
@@ -27,6 +28,7 @@ export interface TransformedAccount {
   paymentMethod: string | null;
   splitPercent: number | null;
   currentBalance: number;
+  createdAt: Date | null; // null => let the DB default (now) apply
 }
 
 function concatAddress(addr: AddressFields): string | null {
@@ -55,12 +57,24 @@ export function transformClientToAccount(client: LibertyClientRow, lookups: Acco
   return {
     libertyClientId: client.CLIENT_ID,
     accountType: client.CLIENT_TYPE_ID === 2 ? "VENDOR" : "CONSIGNOR",
+    // Liberty "Store Account" (type 3): the shop's own buckets (per-year "20XX
+    // Inventory", "Hidden Treasures 2019", ...). Store-owned in Teabox: no balance.
+    isStoreAccount: client.CLIENT_TYPE_ID === 3,
     name,
     phone: lookups.phoneByClientId.get(client.CLIENT_ID)?.trim() || null,
     email: lookups.emailByClientId.get(client.CLIENT_ID)?.trim() || null,
     mailingAddress,
     paymentMethod,
     splitPercent,
-    currentBalance: lookups.balanceByClientId.get(client.CLIENT_ID) ?? 0,
+    // Store accounts are never owed money (Teabox's isBalanceBearing rule), so their
+    // Liberty ledger balances — some sizable, e.g. ~$24k on "2006 Inventory" — are
+    // dropped rather than carried as a debt to the shop itself.
+    currentBalance: client.CLIENT_TYPE_ID === 3 ? 0 : lookups.balanceByClientId.get(client.CLIENT_ID) ?? 0,
+    // When the client was opened in Liberty, not when the migration ran. ~38% of
+    // Hidden Treasures clients share CREATE_TS 2002-08-23 00:00 (the earliest value —
+    // apparently when existing records were first loaded into Liberty); kept as-is,
+    // since it's the best date Liberty has. The fallbacks only cover a NULL CREATE_TS
+    // (1 row as of 2026-10-10: CLIENT_ID 3).
+    createdAt: client.CREATE_TS ?? client.ACTIVE_TS ?? client.LAST_UPDATE_TS ?? null,
   };
 }

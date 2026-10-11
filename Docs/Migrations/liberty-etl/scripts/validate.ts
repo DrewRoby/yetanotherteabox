@@ -35,6 +35,8 @@ async function main() {
     where: { accountType: { in: ["DONOR", "STORE"] }, currentBalance: { not: 0 } },
   });
   check("DONOR/STORE accounts have currentBalance = 0", badBalance === 0, `${badBalance} violating`);
+  const flaggedWithBalance = await prisma.account.count({ where: { isStoreAccount: true, currentBalance: { not: 0 } } });
+  check("isStoreAccount accounts have currentBalance = 0", flaggedWithBalance === 0, `${flaggedWithBalance} violating`);
   const donorStorePayouts = await prisma.payout.count({
     where: { account: { accountType: { in: ["DONOR", "STORE"] } } },
   });
@@ -45,11 +47,21 @@ async function main() {
   const itemCount = await prisma.item.count();
   const distinctSkus = await prisma.$queryRaw<{ n: number }[]>`SELECT COUNT(DISTINCT sku) as n FROM Item;`;
   check("no duplicate sku", Number(distinctSkus[0].n) === itemCount, `${itemCount} items, ${distinctSkus[0].n} distinct skus`);
-  // ...and itemNumber is gapless 1..N per store, since new intakes take count+1.
-  const gappedStores = await prisma.$queryRaw<{ storeId: string }[]>`
-    SELECT storeId FROM Item GROUP BY storeId
-    HAVING MIN(itemNumber) <> 1 OR MAX(itemNumber) <> COUNT(*) OR COUNT(DISTINCT itemNumber) <> COUNT(*);`;
-  check("itemNumber is unique and gapless 1..N per store", gappedStores.length === 0, `${gappedStores.length} stores violating`);
+  // ...and every SKU encodes its own itemNumber — Teabox pads to 6 digits, migrated
+  // Liberty SKUs don't ("LIB-81519"):
+  // new intakes number from max(itemNumber) + 1, so this is what keeps a future SKU
+  // from colliding with a migrated one.
+  const mismatched = await prisma.$queryRaw<{ n: bigint | number }[]>`
+    SELECT COUNT(*) AS n FROM Item
+    WHERE sku NOT LIKE ('%-' || printf('%06d', itemNumber)) AND sku NOT LIKE ('%-' || itemNumber);`;
+  check("every SKU encodes its itemNumber", Number(mismatched[0].n) === 0, `${Number(mismatched[0].n)} mismatched`);
+  const numbering = await prisma.$queryRaw<{ itemPrefix: string; itemStartNumber: number; maxItemNumber: number }[]>`
+    SELECT s.itemPrefix, s.itemStartNumber, MAX(i.itemNumber) AS maxItemNumber
+    FROM Store s LEFT JOIN Item i ON i.storeId = s.id GROUP BY s.id;`;
+  for (const s of numbering) {
+    const next = Math.max(Number(s.maxItemNumber ?? 0) + 1, Number(s.itemStartNumber));
+    console.log(`  Next new item: ${s.itemPrefix}-${String(next).padStart(6, "0")}`);
+  }
 
   // Itemized payouts: lines sum to the payout amount. Compared by magnitude because
   // transformPayout stores |PAYOUT_AMT| while lines keep Liberty's signs (236 Liberty
@@ -91,7 +103,7 @@ async function main() {
   );
 
   const balanceStats = await prisma.account.aggregate({
-    where: { accountType: { in: ["CONSIGNOR", "VENDOR"] } },
+    where: { accountType: { in: ["CONSIGNOR", "VENDOR"] }, isStoreAccount: false },
     _sum: { currentBalance: true },
     _count: true,
   });

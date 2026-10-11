@@ -2,7 +2,7 @@ import { Router } from "express";
 import { prisma } from "../lib/prisma";
 import { authenticate } from "../middleware/auth";
 import { requireRole } from "../middleware/requireRole";
-import { BALANCE_BEARING_ACCOUNT_TYPES, type AccountType } from "../lib/enums";
+import { BALANCE_BEARING_WHERE } from "../services/accounts.service";
 import { z } from "zod";
 import { recordAudit } from "../lib/audit";
 import { issueBadges, listBadgeEligibleUsers, revokeBadge } from "../services/badge.service";
@@ -69,7 +69,7 @@ reportsRouter.get(
         _count: true,
       }),
       prisma.item.count({ where: { storeId, status: "PENDING" } }),
-      prisma.account.findMany({ where: { storeId, accountType: { in: BALANCE_BEARING_ACCOUNT_TYPES as string[] } } }),
+      prisma.account.findMany({ where: { storeId, ...BALANCE_BEARING_WHERE } }),
       prisma.heartbeat.findUnique({ where: { storeId } }),
     ]);
     const pendingPayoutTotal = accounts.reduce((sum, a) => sum + a.currentBalance, 0);
@@ -154,7 +154,7 @@ reportsRouter.get(
     const accounts = await prisma.account.findMany({
       where: {
         storeId: req.session!.storeId,
-        accountType: { in: BALANCE_BEARING_ACCOUNT_TYPES as string[] },
+        ...BALANCE_BEARING_WHERE,
       },
       orderBy: { currentBalance: "desc" },
     });

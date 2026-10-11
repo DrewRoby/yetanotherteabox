@@ -1,7 +1,11 @@
-> **Status (2026-09-07): all excluded from the real migration for this round**,
-> project-side decision made to unblock cutover rather than guess with real money on
-> the line — see spec §9. Still needs Sherry's actual sort below before a follow-up
-> load brings any of these in.
+> **Status (2026-10-11): all migrated, flagged as store accounts.** Teabox now has an
+> "is store account" flag (store-owned: no balance, no payouts), and every account
+> below came in with it set and its ledger balance dropped to $0. Sherry's sort below
+> is still wanted, but now only to find the ones that are **not** really the store's
+> — real vendors or people (the "Vendor"/"Consignor?" suggestions). Staff fix those by
+> unticking "Store account" on the account's page in Teabox; if one was genuinely owed
+> money, that balance has to be re-entered by hand, since it wasn't carried over.
+> (Was: excluded from the migration, 2026-09-07.)
 
 # "Store Account" list for Sherry to sort
 

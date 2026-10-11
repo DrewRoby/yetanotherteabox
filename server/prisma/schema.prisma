@@ -24,10 +24,12 @@ generator client {
 }
 
 model Store {
-  id        String   @id @default(cuid())
-  name      String
-  location  String?
-  createdAt DateTime @default(now())
+  id              String   @id @default(cuid())
+  name            String
+  location        String?
+  itemPrefix      String   @default("TBX") // new items' SKU prefix: "<itemPrefix>-<itemNumber>" — see src/services/items.service.ts nextItemIdentity
+  itemStartNumber Int      @default(1) // floor for the next new itemNumber; numbering otherwise continues from the store's highest
+  createdAt       DateTime @default(now())
 
   users     UserRole[]
   accounts  Account[]
@@ -39,17 +41,17 @@ model Store {
 // Auth identity only. Permissions never derive from this record directly — always
 // from the single active UserRole encoded into the session JWT. See UserRole.
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  passwordHash String
-  name         String
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String
+  name          String
   // Sign-in-sheet badge (scan-to-login). Only a SHA-256 of the random code is stored —
   // the plaintext exists only on the printed sheet, so regenerating a sheet rotates the
   // code and the old one stops working. Null = no badge. See src/services/badge.service.ts.
   badgeCodeHash String?   @unique
   badgeIssuedAt DateTime?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   roles         UserRole[]
   itemHistories ItemHistory[]
@@ -85,7 +87,7 @@ model UserRole {
 // intake ALWAYS has a target account (see items.route.ts).
 // `accountType` is one of: CONSIGNOR, VENDOR, DONOR, BOOTH_OWNER, STORE.
 model Account {
-  id             String   @id @default(cuid())
+  id             String    @id @default(cuid())
   storeId        String
   accountType    String
   name           String
@@ -94,10 +96,11 @@ model Account {
   paymentMethod  String? // JSON-encoded { method, details }
   mailingAddress String? // free text, concatenated — same convention as Store.location. No current write path (see server/CLAUDE.md).
   splitPercent   Int? // consignor/vendor/booth-owner revenue share, e.g. 60
-  currentBalance Float    @default(0)
+  currentBalance Float     @default(0)
+  isStoreAccount Boolean   @default(false) // an extra store-owned account (e.g. a shop's per-year "2019 Inventory" bucket): store-owned rules like the STORE type, but keeps its own accountType/history — see isBalanceBearing() in src/services/accounts.service.ts
   lastSaleAt     DateTime? // denormalized MAX(Sale.saleDate) over this account's items — stamped by POS checkout, so the Accounts list doesn't aggregate ~1M sales per load
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   store     Store      @relation(fields: [storeId], references: [id])
   userRoles UserRole[]
@@ -133,9 +136,9 @@ model Item {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  account Account       @relation(fields: [accountId], references: [id])
-  store   Store         @relation(fields: [storeId], references: [id])
-  photos  Photo[]
+  account     Account       @relation(fields: [accountId], references: [id])
+  store       Store         @relation(fields: [storeId], references: [id])
+  photos      Photo[]
   history     ItemHistory[]
   sales       Sale[]
   payoutLines PayoutLine[]
@@ -189,15 +192,18 @@ model Sale {
 
 // `status` is one of: REQUESTED, APPROVED, PAID, REJECTED.
 model Payout {
-  id        String    @id @default(cuid())
-  accountId String
-  amount    Float
-  status    String    @default("REQUESTED")
-  createdAt DateTime  @default(now())
-  paidAt    DateTime?
+  id           String    @id @default(cuid())
+  payoutNumber Int       @unique // human-facing "Payout #": next = max + 1 (services/accounts.service.ts nextPayoutNumber); migrated payouts keep the source system's number. Globally unique (Payout has no storeId; one store per install).
+  accountId    String
+  amount       Float
+  status       String    @default("REQUESTED")
+  createdAt    DateTime  @default(now())
+  paidAt       DateTime?
 
   account Account      @relation(fields: [accountId], references: [id])
   lines   PayoutLine[]
+
+  @@index([accountId, createdAt]) // per-account payout history, newest first; also lets payout search start from the account's payouts instead of every PayoutLine
 }
 
 // Itemization of a Payout: what it covered. Signed amounts (deductions/returns are

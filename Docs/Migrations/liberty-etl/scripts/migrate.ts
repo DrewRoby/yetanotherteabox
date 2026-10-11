@@ -1,12 +1,10 @@
 // Test migration: Liberty (Hidden Treasures) -> a scratch Teabox SQLite DB.
 //
 // Scope (per the migration plan, confirmed with the user 2026-09-07): full
-// historical archive. Excludes, for this batch, the ~46 CLIENT_TYPE_ID=3 ("Store
-// Account") rows pending the shop owner's review (see
-// ../reports/client_type_3_review.md) and CLIENT_ID 101508 (corrupted ~$2B ledger
-// balance, see the spec §3.1) — their items/sales/payouts will follow once that
-// review comes back. Everything else — ordinary Client/Retail Vendor accounts,
-// Items, Sales, Payouts — is migrated now.
+// historical archive. Liberty's CLIENT_TYPE_ID=3 ("Store Account") rows come in as
+// accounts flagged isStoreAccount (decided 2026-10-11, see
+// ../reports/client_type_3_review.md). Excludes only CLIENT_ID 101508 (corrupted ~$2B
+// ledger balance, see the spec §3.1) and its items/sales/payouts.
 //
 // Usage: npm run migrate   (reads .env; the scratch DB must already have migrations
 // applied — see README.md)
@@ -41,6 +39,15 @@ import { transformPayout, transformPayoutLine } from "../transform/payout";
 import { prisma } from "../load/prisma";
 import { createManyChunked } from "../load/batch";
 import { applyUsersAndRoles } from "../load/users";
+
+// The next "round" number strictly above n, rounding up at the leading digit:
+// 13059 -> 20000, 1162674 -> 2000000, 999 -> 1000. Used for items.startNumber: auto,
+// so the first Teabox tag number is visibly past anything the old system issued.
+function nextRoundNumberAbove(n: number): number {
+  if (n < 1) return 1;
+  const unit = 10 ** Math.floor(Math.log10(n));
+  return (Math.floor(n / unit) + 1) * unit;
+}
 
 function newId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID()}`;
@@ -116,13 +123,24 @@ async function main() {
     .filter(Boolean)
     .join(", ");
 
+  const maxLibertyItemId = items.reduce((max, i) => Math.max(max, i.ITEM_ID), 0);
+  const itemStartNumber =
+    config.items.startNumber === "auto" ? nextRoundNumberAbove(maxLibertyItemId) : config.items.startNumber;
   await prisma.store.create({
     data: {
       id: storeId,
       name: config.store.name || libertyStore.STORE_NAME?.trim() || "Hidden Treasures",
       location: config.store.location || libertyStoreAddress || null,
+      ...(config.items.prefix ? { itemPrefix: config.items.prefix } : {}),
+      ...(itemStartNumber ? { itemStartNumber } : {}),
     },
   });
+  if (config.items.prefix || itemStartNumber) {
+    console.log(
+      `New items will be tagged ${config.items.prefix ?? "(default prefix)"}-${itemStartNumber ?? "(default start)"} onward ` +
+        `(highest Liberty ITEM_ID: ${maxLibertyItemId}).`
+    );
+  }
   await prisma.account.create({
     data: { id: storeAccountId, storeId, accountType: "STORE", name: "Store-Owned Inventory" },
   });
@@ -147,6 +165,7 @@ async function main() {
       id,
       storeId,
       accountType: t.accountType,
+      isStoreAccount: t.isStoreAccount,
       name: t.name,
       phone: t.phone,
       email: t.email,
@@ -154,6 +173,7 @@ async function main() {
       paymentMethod: t.paymentMethod,
       splitPercent: t.splitPercent,
       currentBalance: t.currentBalance,
+      ...(t.createdAt ? { createdAt: t.createdAt } : {}),
     };
   });
   await createManyChunked((data) => prisma.account.createMany({ data }), accountRows, 1000, "accounts");
@@ -173,7 +193,6 @@ async function main() {
 
   const itemIdByLibertyItemId = new Map<number, string>();
   const itemRows: any[] = [];
-  const libertyItemIdByRow = new Map<any, number>();
   let skippedForExcludedOwner = 0;
 
   for (const item of items) {
@@ -184,7 +203,7 @@ async function main() {
     } else {
       const mapped = accountIdByClientId.get(t.ownerClientId);
       if (!mapped) {
-        // Owned by an excluded CLIENT_TYPE_ID=3 (or the corrupted) account — skip for this batch.
+        // Owned by the excluded corrupted-ledger account (CLIENT_ID 101508) — skip.
         skippedForExcludedOwner++;
         continue;
       }
@@ -195,6 +214,11 @@ async function main() {
     itemRows.push({
       id,
       sku: t.sku,
+      // Liberty's own ITEM_ID — the number already in the migrated "LIB-" SKU. Teabox
+      // numbers new items one past the store's highest itemNumber (never below
+      // Store.itemStartNumber), and every SKU encodes its own number, so keeping the
+      // two equal is what guarantees a new SKU can never collide with a migrated one.
+      itemNumber: t.libertyItemId,
       description: t.description,
       category: t.category,
       subcategory: t.subcategory,
@@ -209,19 +233,7 @@ async function main() {
       accountId,
       storeId,
     });
-    libertyItemIdByRow.set(itemRows[itemRows.length - 1], t.libertyItemId);
   }
-  // itemNumber: per-store 1..N over intake order (ITEM_ID as tiebreak), same strategy
-  // as the 20260915011122_add_item_number backfill (spec §4, Item.itemNumber). Must be
-  // gapless — new intakes take `count(items in store) + 1` (server items.routes.ts), so
-  // any gap here would make a future intake collide with a migrated number.
-  itemRows.sort(
-    (a, b) =>
-      a.intakeDate.getTime() - b.intakeDate.getTime() || libertyItemIdByRow.get(a)! - libertyItemIdByRow.get(b)!
-  );
-  itemRows.forEach((row, i) => {
-    row.itemNumber = i + 1;
-  });
   await createManyChunked((data) => prisma.item.createMany({ data }), itemRows, 2000, "items");
   console.log(`Created ${itemRows.length} Item rows (${skippedForExcludedOwner} skipped — owned by an excluded account).`);
 
@@ -286,6 +298,9 @@ async function main() {
     payoutIdByLibertyPayoutId.set(payout.PAYOUT_ID, payoutId);
     payoutRows.push({
       id: payoutId,
+      // Liberty's own payout number — what the shop's old check-detail reports and
+      // records reference. New Teabox payouts continue from the highest one.
+      payoutNumber: payout.PAYOUT_ID,
       accountId,
       amount: t.amount,
       status: t.status,

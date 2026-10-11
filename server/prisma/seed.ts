@@ -12,7 +12,7 @@ async function main() {
   const passwordHash = await hash(DEMO_PASSWORD);
 
   const store = await prisma.store.create({
-    data: { name: "MyResale Boutique — Demo Store", location: "Springfield, IL" },
+    data: { name: "MyResale Boutique — Demo Store", location: "Springfield, IL", itemPrefix: "DEMO" },
   });
 
   const storeAccount = await prisma.account.create({
@@ -154,8 +154,8 @@ async function main() {
       SELECT MAX(s."saleDate") FROM "Item" i JOIN "Sale" s ON s."itemId" = i."id" WHERE i."accountId" = "Account"."id"
     );`);
 
-  await prisma.payout.create({ data: { accountId: consignorAccount.id, amount: 95.0, status: "PAID", paidAt: new Date() } });
-  await prisma.payout.create({ data: { accountId: boothAccount.id, amount: 420.0, status: "REQUESTED" } });
+  await prisma.payout.create({ data: { payoutNumber: 1, accountId: consignorAccount.id, amount: 95.0, status: "PAID", paidAt: new Date() } });
+  await prisma.payout.create({ data: { payoutNumber: 2, accountId: boothAccount.id, amount: 420.0, status: "REQUESTED" } });
 
   await prisma.heartbeat.create({ data: { storeId: store.id, lastSyncedAt: new Date() } });
 

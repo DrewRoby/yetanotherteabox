@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { ITEM_PREFIX_PATTERN } from "../lib/barcode";
 import { completeSetup, needsSetup, SetupAlreadyCompleteError } from "../services/setup.service";
 
 // Deliberately unauthenticated (mounted before the `authenticate` middleware in
@@ -18,6 +19,10 @@ const completeSetupSchema = z.object({
   ownerName: z.string().min(1),
   ownerEmail: z.string().email(),
   password: z.string().min(8),
+  // Optional item-numbering settings (Store.itemPrefix / itemStartNumber); defaults
+  // apply when omitted, and both stay editable later in Settings > Store.
+  itemPrefix: z.string().trim().toUpperCase().regex(ITEM_PREFIX_PATTERN).optional(),
+  itemStartNumber: z.number().int().positive().optional(),
 });
 
 setupRouter.post("/complete", async (req, res) => {

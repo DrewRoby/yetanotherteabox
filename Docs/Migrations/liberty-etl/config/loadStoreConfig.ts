@@ -21,6 +21,9 @@ export interface AccountScopedRoleEntry {
 
 export interface StoreConfig {
   store: { name: string; location: string };
+  // New Teabox items' tag numbering (Store.itemPrefix / itemStartNumber). "auto" =
+  // the next round number above the source system's highest item number.
+  items: { prefix?: string; startNumber?: number | "auto" };
   owner: { name: string; email: string; password: string };
   roles: Partial<Record<Role, (StaffRoleEntry | AccountScopedRoleEntry)[]>>;
 }
@@ -64,8 +67,23 @@ export function loadStoreConfig(configPath = path.join(__dirname, "store.yaml"))
     roles[role] = entries;
   }
 
+  const items: StoreConfig["items"] = {};
+  if (raw.items?.prefix != null) {
+    const prefix = String(raw.items.prefix).trim().toUpperCase();
+    if (!/^[A-Z0-9]{1,8}$/.test(prefix)) throw new Error(`${configPath}: items.prefix must be 1–8 letters/digits`);
+    items.prefix = prefix;
+  }
+  if (raw.items?.startNumber != null) {
+    const start = raw.items.startNumber;
+    if (start !== "auto" && !(Number.isInteger(start) && start > 0)) {
+      throw new Error(`${configPath}: items.startNumber must be a positive whole number or "auto"`);
+    }
+    items.startNumber = start;
+  }
+
   return {
     store: { name: raw.store.name.trim(), location: (raw.store.location ?? "").trim() },
+    items,
     owner: { name: raw.owner.name.trim(), email: raw.owner.email.trim(), password: String(raw.owner.password) },
     roles,
   };

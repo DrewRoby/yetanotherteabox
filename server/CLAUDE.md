@@ -31,7 +31,7 @@ no shared package).
 - `User` — auth identity only (email/passwordHash/name, plus `badgeCodeHash`/`badgeIssuedAt` for sign-in-sheet badges — see "Sign-in-sheet badges" below). Never carries roles directly.
 - `UserRole` — `(userId, role, storeId, accountId?)`. One row per role a person holds; a user with both `MANAGER` and `CONSIGNOR` rows still only acts as one per session. `accountId` set for account-scoped roles (Consignor/Vendor/Donor/Booth Owner) — links the grant to the `Account` it acts on.
 - `Store` — one per shop.
-- `Account` — polymorphic party items/payouts attach to: `accountType ∈ {CONSIGNOR, VENDOR, DONOR, BOOTH_OWNER, STORE}`. Every store has exactly one `STORE`-type account (store-owned inventory) so intake always has a target. `serializeAccount()` (`src/services/accounts.service.ts`) strips `currentBalance` from the API response entirely for non-balance-bearing types (Donor, Store) — not just hidden in the UI. `mailingAddress` (free text, like `Store.location`) and `paymentMethod` have **no current write path** — populated only by direct SQL (e.g. a migration), not reachable via any route or UI today.
+- `Account` — polymorphic party items/payouts attach to: `accountType ∈ {CONSIGNOR, VENDOR, DONOR, BOOTH_OWNER, STORE}`. Every store has exactly one `STORE`-type account (store-owned inventory) so intake always has a target. `isStoreAccount` flags *additional* store-owned accounts (a shop's per-year "2019 Inventory" buckets, kept separate for their history) under an ordinary `CONSIGNOR`/`VENDOR`/`BOOTH_OWNER` type. **`isBalanceBearing()` (`src/services/accounts.service.ts`) is the one rule for "is this account owed money"** — balance-bearing type *and* not flagged; checkout credits, payouts, `serializeAccount()`'s balance stripping (Donor/Store/flagged — removed from the API response, not just hidden in the UI) and the payout reports (`BALANCE_BEARING_WHERE`) all use it. Don't test `BALANCE_BEARING_ACCOUNT_TYPES` alone. `mailingAddress` (free text, like `Store.location`) and `paymentMethod` have **no current write path** — populated only by direct SQL (e.g. a migration), not reachable via any route or UI today.
 - `Item` — `accountId` is **required** (no intake without an account). `status ∈ {PENDING, AVAILABLE, SOLD, DONATED, DISPOSED, RETURNED}`. `cost` (acquisition cost basis) has **no current write path**, same as `consignmentType`. `sku` is also the barcode value (see below) — POS scan lookup, the printed tag, and the web `Barcode` component all key off it. `itemNumber` is a sequential-per-store counter (`@@unique([storeId, itemNumber])`) that `sku` is derived from.
 - `ItemHistory`, `Photo`, `Sale`, `Payout`, `Device`, `Heartbeat` — as named.
 - `PayoutLine` — itemization of a `Payout`; a `Sale` with a line counts as paid out. See "Accounts" below.
@@ -121,16 +121,27 @@ Every route that creates an `Item` goes through this — don't bypass it.
 
 ## Barcode values (`src/lib/barcode.ts`)
 
-`formatBarcode(storeId, itemNumber)` → `` `${storeId}-${itemNumber padded to 6}` ``,
-used as `Item.sku` (also the value rendered as a real Code128 barcode by the web
-`Barcode` component, and what POS scan lookup matches against). `items.routes.ts`'s
-intake handler assigns `itemNumber` and `sku` inside one `prisma.$transaction` (count
-existing items for the store, +1) rather than as a separate step before `create` —
-SQLite serializes writer transactions, so this is race-free without needing a DB
-sequence. This replaced an earlier `generateSku(category)` (3-letter category prefix +
-random suffix); migration `20260915011122_add_item_number` backfilled existing rows'
-`itemNumber` via a per-store `ROW_NUMBER() OVER (PARTITION BY storeId ORDER BY
-intakeDate)` window function when the column was added as non-nullable.
+`formatBarcode(prefix, itemNumber)` → `` `${prefix}-${itemNumber padded to 6}` ``
+(e.g. `HT-2000000`), used as `Item.sku` (also the value rendered as a real Code128
+barcode by the web `Barcode` component, and what POS scan lookup matches against). The
+prefix is the store's `Store.itemPrefix` (1–8 uppercase letters/digits,
+`ITEM_PREFIX_PATTERN`). `nextItemIdentity()` (`services/items.service.ts`) picks the
+number: **one past the store's highest `itemNumber`, never below
+`Store.itemStartNumber`**, inside the intake handler's `prisma.$transaction` (SQLite
+serializes writer transactions, so read-then-create is race-free without a DB
+sequence).
+
+**Invariant: every SKU encodes its own item's `itemNumber`** — that's what makes max + 1
+collision-free under any prefix, including migrated ones (Liberty items keep
+`LIB-<ITEM_ID>` with `itemNumber = ITEM_ID`; Teabox pads to 6 digits, Liberty doesn't).
+Any path that creates items must keep it (`liberty-etl`'s `npm run validate` checks it).
+Numbers are *not* gapless and lowering `itemStartNumber` can't move numbering backwards.
+Prefix/start are set at setup (wizard fields, or `SETUP_ITEM_PREFIX`/`SETUP_ITEM_START`
+in `config.env`), by a migration (`liberty-etl`'s `store.yaml` `items:`), or later in
+Settings > Store (`GET/PUT /settings/store`: view Manager+, edit Owner/Admin, audited
+`UPDATE_ITEM_NUMBERING`; the GET includes a `nextSku` preview). History: this replaced
+`${storeId}-${count + 1}` (2026-10-11), which replaced an earlier
+`generateSku(category)`.
 
 See `web/CLAUDE.md`'s "Barcode scanning" section for the read side — a physical USB
 scanner needs no server-side integration at all (it's a keyboard, not a device with a
@@ -188,7 +199,35 @@ system never itemized from being swept into a new check) — plus one `ADJUSTMEN
 for whatever part of `currentBalance` those don't explain, so lines always sum to the
 amount. `consignorShareOf()` there is the one split formula, shared with checkout.
 `POST /me/payouts` (consignor *request*) writes no lines; nothing approves/pays a
-`REQUESTED` payout yet.
+`REQUESTED` payout yet. Every payout gets a `payoutNumber` (the human-facing
+"Payout #"; migrated ones keep the source system's number) from `nextPayoutNumber()`
+inside the creating transaction — any new payout-creating path must do the same.
+
+**Store-account flag.** `GET /?accountType=STORE` (the Store tab) returns the built-in
+`STORE` account plus every `isStoreAccount` account; any other `accountType` excludes
+flagged ones. `PATCH /:id { isStoreAccount }` (Owner/Manager/Admin, audited
+`FLAG_STORE_ACCOUNT`/`UNFLAG_STORE_ACCOUNT`) toggles it — only on balance-bearing
+types, and flagging is **refused (409) while `currentBalance` ≠ 0**: going from "we
+owe $X" to "nobody is owed anything" must go through a payout, not a checkbox. A
+flagged account keeps its historical payouts (`GET /:id` returns payouts for every
+account).
+
+**Account items** (`GET /:id/items`, `services/accountItems.service.ts`): the detail
+page's item table, filtered/sorted/paged **server-side** (`q`, `status`, `sold`,
+`paid`, `payout`, `createdFrom/To`, `soldFrom/To` as epoch ms, `sort`, `dir`, `page`).
+Derived columns — `soldAt` (latest sale) and the latest payout containing the item —
+are raw SQL, computed only for the returned page unless the sort/filter needs them
+across the whole account. Consignors (≤ ~6k items) answer in ≤ ~150ms; sorting the
+~340k-item migrated STORE account by sold date or payout takes 3–5s and is accepted
+as-is. "Created" is `intakeDate` (a migrated item's `createdAt` is the migration day).
+`GET /:id` returns only `itemCount` and `payoutCount` — no items or payouts.
+
+**Account payouts** (`GET /:id/payouts?q=&from=&to=&page=&pageSize=`, default 5 per page,
+newest first): `q` keeps payouts containing an item whose description includes it, and
+each row reports `matchCount` of `itemCount`. The search first collects matching payout
+ids with one raw join scoped to the account — Prisma's `lines: { some: { item: ... } }`
+scanned every `PayoutLine` in the store (~7s on migrated data) — and leans on
+`Payout @@index([accountId, createdAt])`; ~100ms for the busiest migrated consignor.
 
 ## POS (`src/routes/pos.routes.ts`)
 

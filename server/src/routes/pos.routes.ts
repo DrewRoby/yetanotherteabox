@@ -4,8 +4,7 @@ import { prisma } from "../lib/prisma";
 import { authenticate } from "../middleware/auth";
 import { requireRole } from "../middleware/requireRole";
 import { recordAudit } from "../lib/audit";
-import { BALANCE_BEARING_ACCOUNT_TYPES, type AccountType } from "../lib/enums";
-import { consignorShareOf } from "../services/accounts.service";
+import { consignorShareOf, isBalanceBearing } from "../services/accounts.service";
 
 export const posRouter = Router();
 posRouter.use(authenticate, requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER", "EMPLOYEE", "REGISTER"));
@@ -112,7 +111,7 @@ posRouter.post("/checkout", async (req, res) => {
 
     // lastSaleAt for every account type (the Accounts list shows it on all tabs); the
     // balance credit only for balance-bearing ones.
-    const credit = BALANCE_BEARING_ACCOUNT_TYPES.includes(item.account.accountType as AccountType)
+    const credit = isBalanceBearing(item.account)
       ? consignorShareOf(line.salePrice, item.account.splitPercent)
       : null;
     await prisma.account.update({

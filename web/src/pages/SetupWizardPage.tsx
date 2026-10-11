@@ -14,6 +14,12 @@ export function SetupWizardPage() {
 
   const [storeName, setStoreName] = useState("");
   const [storeLocation, setStoreLocation] = useState("");
+  // Optional item numbering (Store.itemPrefix / itemStartNumber) — blank = defaults
+  // (TBX, from 1); both stay editable later in Settings > Store.
+  const [itemPrefix, setItemPrefix] = useState("");
+  const [itemStart, setItemStart] = useState("");
+  const itemPrefixValid = !itemPrefix || /^[A-Z0-9]{1,8}$/.test(itemPrefix);
+  const itemStartValid = !itemStart || /^[1-9]d*$/.test(itemStart);
   const [ownerName, setOwnerName] = useState("");
   const [ownerEmail, setOwnerEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -35,6 +41,8 @@ export function SetupWizardPage() {
       const result = await api.post<{ token: string }>("/setup/complete", {
         storeName,
         storeLocation: storeLocation || undefined,
+        itemPrefix: itemPrefix || undefined,
+        itemStartNumber: itemStart ? Number(itemStart) : undefined,
         ownerName,
         ownerEmail,
         password,
@@ -106,6 +114,25 @@ export function SetupWizardPage() {
                 onChange={setStoreLocation}
                 placeholder="Boulder, CO"
               />
+              <div className="grid grid-cols-2 gap-4">
+                <Field
+                  label="Item tag prefix (optional)"
+                  value={itemPrefix}
+                  onChange={(v) => setItemPrefix(v.toUpperCase().slice(0, 8))}
+                  placeholder="TBX"
+                />
+                <Field label="First item number (optional)" value={itemStart} onChange={setItemStart} placeholder="1" />
+              </div>
+              {(!itemPrefixValid || !itemStartValid) && (
+                <p className="text-crimson text-xs">
+                  {!itemPrefixValid ? "The prefix can only use letters and digits. " : ""}
+                  {!itemStartValid ? "The first item number must be a whole number above 0." : ""}
+                </p>
+              )}
+              <p className="text-xs text-gray-500">
+                New items will be tagged {itemPrefix || "TBX"}-{(itemStart || "1").padStart(6, "0")}, then count up. You can
+                change this later in Settings.
+              </p>
               <div className="flex gap-3">
                 <button
                   type="button"
@@ -116,7 +143,7 @@ export function SetupWizardPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={!storeName}
+                  disabled={!storeName || !itemPrefixValid || !itemStartValid}
                   className="flex-1 py-3 bg-crimson text-white border border-ink font-bold uppercase text-xs tracking-wide hover:bg-ink disabled:opacity-40"
                 >
                   Next

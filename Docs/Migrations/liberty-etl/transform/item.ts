@@ -8,7 +8,7 @@ export interface ItemLookups {
   brandByItemId: Map<number, string>;
   sizeByItemId: Map<number, string>;
   // ITEM_ID -> CLIENT_ID, only for clients we're migrating in this batch (§3.1 —
-  // CLIENT_TYPE_ID=3 accounts excluded pending the owner's review).
+  // CLIENT_ID 101508, the corrupted-ledger account, is excluded).
   ownerClientIdByItemId: Map<number, number>;
 }
 

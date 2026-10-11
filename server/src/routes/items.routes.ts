@@ -5,10 +5,9 @@ import { authenticate } from "../middleware/auth";
 import { requireRole } from "../middleware/requireRole";
 import { recordAudit } from "../lib/audit";
 import { ITEM_STATUSES } from "../lib/enums";
-import { IntakeAccountError, resolveIntakeAccountId } from "../services/items.service";
+import { IntakeAccountError, nextItemIdentity, resolveIntakeAccountId } from "../services/items.service";
 import { printTagBatch } from "../adapters/printer";
 import { suggestMetadata } from "../adapters/cv";
-import { formatBarcode } from "../lib/barcode";
 
 export const itemsRouter = Router();
 itemsRouter.use(authenticate);
@@ -96,14 +95,14 @@ itemsRouter.post("/", async (req, res) => {
   }
 
   // itemNumber + sku are assigned inside the same transaction as the create so two
-  // concurrent intakes for this store can't compute the same number (SQLite
-  // serializes writer transactions, so the count-then-create here is race-free).
+  // concurrent intakes for this store can't compute the same number (see
+  // nextItemIdentity in items.service.ts).
   const storeId = req.session!.storeId;
   const item = await prisma.$transaction(async (tx) => {
-    const itemNumber = (await tx.item.count({ where: { storeId } })) + 1;
+    const { itemNumber, sku } = await nextItemIdentity(tx, storeId);
     return tx.item.create({
       data: {
-        sku: formatBarcode(storeId, itemNumber),
+        sku,
         itemNumber,
         description: parsed.data.description,
         category: parsed.data.category,

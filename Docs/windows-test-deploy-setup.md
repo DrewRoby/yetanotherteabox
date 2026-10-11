@@ -72,6 +72,8 @@ SETUP_STORE_LOCATION=Springfield, IL   # optional
 SETUP_OWNER_NAME=Jane Owner
 SETUP_OWNER_EMAIL=owner@example.com
 SETUP_OWNER_PASSWORD=change-me-to-something-real
+SETUP_ITEM_PREFIX=TBX                  # optional — new items tagged TBX-000001, ...
+SETUP_ITEM_START=1                     # optional — first item number
 ```
 
 On startup, `maybeAutoCompleteSetup()` (`server/src/services/setup.service.ts`) runs

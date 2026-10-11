@@ -9,6 +9,8 @@ import { ROLES } from "../lib/enums";
 import { inviteUser } from "../services/users.service";
 import { testPrinterConnection } from "../adapters/printer";
 import { runHeartbeatSync } from "../adapters/cloudSync";
+import { ITEM_PREFIX_PATTERN } from "../lib/barcode";
+import { nextItemIdentity } from "../services/items.service";
 
 export const settingsRouter = Router();
 settingsRouter.use(authenticate);
@@ -26,6 +28,36 @@ settingsRouter.put("/profile", async (req, res) => {
   if (parsed.data.password) data.passwordHash = await bcrypt.hash(parsed.data.password, 10);
   const user = await prisma.user.update({ where: { id: req.session!.sub }, data });
   res.json({ id: user.id, name: user.name, email: user.email });
+});
+
+// ---- Store: item numbering (view: Manager+, edit: Owner/Admin) ----
+async function storeSettings(storeId: string) {
+  const store = await prisma.store.findUniqueOrThrow({
+    where: { id: storeId },
+    select: { name: true, location: true, itemPrefix: true, itemStartNumber: true },
+  });
+  // Preview of what intake will assign next — same rule, outside a transaction.
+  const next = await prisma.$transaction((tx) => nextItemIdentity(tx, storeId));
+  const { _max } = await prisma.item.aggregate({ where: { storeId }, _max: { itemNumber: true } });
+  return { ...store, highestItemNumber: _max.itemNumber ?? 0, nextItemNumber: next.itemNumber, nextSku: next.sku };
+}
+
+settingsRouter.get("/store", requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER"), async (req, res) => {
+  res.json(await storeSettings(req.session!.storeId));
+});
+
+const storeSettingsSchema = z.object({
+  itemPrefix: z.string().trim().toUpperCase().regex(ITEM_PREFIX_PATTERN, "Use 1–8 letters or digits"),
+  itemStartNumber: z.number().int().positive(),
+});
+settingsRouter.put("/store", requireRole("SYSTEM_ADMIN", "OWNER"), async (req, res) => {
+  const parsed = storeSettingsSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const storeId = req.session!.storeId;
+  const before = await prisma.store.findUniqueOrThrow({ where: { id: storeId }, select: { itemPrefix: true, itemStartNumber: true } });
+  await prisma.store.update({ where: { id: storeId }, data: parsed.data });
+  await recordAudit(req.session!, "Store", storeId, "UPDATE_ITEM_NUMBERING", { before, after: parsed.data });
+  res.json(await storeSettings(storeId));
 });
 
 // ---- Users & Permissions (Owner/Admin only) ----

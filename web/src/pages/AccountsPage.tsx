@@ -1,17 +1,22 @@
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { Badge, Button, Card } from "../components/Card";
+import { AccountItems } from "./accounts/AccountItems";
+import { AccountPayouts } from "./accounts/AccountPayouts";
+import { formatDate, money } from "./accounts/format";
 
 interface AccountRow {
   id: string;
   accountType: string;
+  isStoreAccount: boolean; // store-owned like the STORE type: no balance, no payouts
   name: string;
   email: string | null;
   phone: string | null;
   createdAt: string;
   lastSaleAt: string | null;
+  lastPayoutAt?: string | null; // list endpoint only
   currentBalance?: number;
 }
 
@@ -25,17 +30,15 @@ const TABS = [
 
 const CAN_CREATE_ROLES = ["SYSTEM_ADMIN", "OWNER", "MANAGER"];
 
-type SortKey = "name" | "createdAt" | "lastSaleAt" | "balance";
+type SortKey = "name" | "createdAt" | "lastSaleAt" | "lastPayoutAt" | "balance";
 // Dates and balances read most usefully newest/largest first; names A→Z.
-const DEFAULT_DESC: Record<SortKey, boolean> = { name: false, createdAt: true, lastSaleAt: true, balance: true };
-
-function formatDate(iso: string | null | undefined): string {
-  return iso ? new Date(iso).toLocaleDateString() : "—";
-}
-
-function money(n: number): string {
-  return `$${n.toFixed(2)}`;
-}
+const DEFAULT_DESC: Record<SortKey, boolean> = {
+  name: false,
+  createdAt: true,
+  lastSaleAt: true,
+  lastPayoutAt: true,
+  balance: true,
+};
 
 // One route component for the whole Accounts area: list, account detail, payout detail.
 export function AccountsPage() {
@@ -97,15 +100,17 @@ function AccountList() {
           return a.createdAt;
         case "lastSaleAt":
           return a.lastSaleAt ?? "";
+        case "lastPayoutAt":
+          return a.lastPayoutAt ?? "";
         case "balance":
           return a.currentBalance ?? 0;
       }
     };
     return [...filtered].sort((a, b) => {
-      // Accounts with no sale yet always sort last, whichever direction.
-      if (sortKey === "lastSaleAt" && !a.lastSaleAt !== !b.lastSaleAt) return a.lastSaleAt ? -1 : 1;
       const va = value(a);
       const vb = value(b);
+      // Accounts with no sale/payout yet always sort last, whichever direction.
+      if ((sortKey === "lastSaleAt" || sortKey === "lastPayoutAt") && !va !== !vb) return va ? -1 : 1;
       const cmp = typeof va === "number" ? va - (vb as number) : va.localeCompare(vb as string);
       return sortDesc ? -cmp : cmp;
     });
@@ -121,7 +126,7 @@ function AccountList() {
 
   const canCreate = user ? CAN_CREATE_ROLES.includes(user.activeRole) : false;
   const showsBalance = tab !== "DONOR" && tab !== "STORE";
-  const columnCount = showsBalance ? 4 : 3;
+  const columnCount = showsBalance ? 5 : 3;
 
   function sortHeader(k: SortKey, label: string, align: "left" | "right" = "left") {
     const active = sortKey === k;
@@ -197,6 +202,7 @@ function AccountList() {
                 {sortHeader("name", "Name")}
                 {sortHeader("createdAt", "Created")}
                 {sortHeader("lastSaleAt", "Latest Sale")}
+                {showsBalance && sortHeader("lastPayoutAt", "Latest Payout")}
                 {showsBalance && sortHeader("balance", "Balance", "right")}
               </tr>
             </thead>
@@ -207,9 +213,25 @@ function AccountList() {
                     <Link to={`/accounts/${a.id}`} className="hover:text-crimson hover:underline">
                       {a.name}
                     </Link>
+                    {a.accountType === "STORE" && (
+                      <span className="ml-2 align-middle">
+                        <Badge>Built-in</Badge>
+                      </span>
+                    )}
                   </td>
                   <td className="p-3">{formatDate(a.createdAt)}</td>
                   <td className="p-3">{formatDate(a.lastSaleAt)}</td>
+                  {showsBalance && (
+                    <td className="p-3">
+                      {a.lastPayoutAt ? (
+                        <Link to={`/accounts/${a.id}#payouts`} className="hover:text-crimson hover:underline">
+                          {formatDate(a.lastPayoutAt)}
+                        </Link>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                  )}
                   {showsBalance && <td className="p-3 font-bold text-right">{money(a.currentBalance ?? 0)}</td>}
                 </tr>
               ))}
@@ -228,40 +250,80 @@ function AccountList() {
   );
 }
 
-interface PayoutSummary {
-  id: string;
-  amount: number;
-  status: string;
-  createdAt: string;
-  paidAt: string | null;
-  itemCount: number;
-}
-
 interface AccountDetailData extends AccountRow {
   splitPercent: number | null;
-  items: { id: string; sku: string; description: string; status: string; price: number }[];
-  itemCount: number; // total; `items` is only the newest slice
-  payouts: PayoutSummary[];
+  itemCount: number; // the items themselves load via <AccountItems> (GET /accounts/:id/items)
+  payoutCount: number; // the payouts themselves load via <AccountPayouts> (GET /accounts/:id/payouts)
 }
 
+// Only these types can be flagged isStoreAccount (server: PATCH /accounts/:id) — the
+// built-in STORE account and DONOR accounts are never owed money to begin with.
+const FLAGGABLE_TYPES = ["CONSIGNOR", "VENDOR", "BOOTH_OWNER"];
+
 function AccountDetail({ id }: { id: string }) {
+  const { user } = useAuth();
   const [account, setAccount] = useState<AccountDetailData | null>(null);
+  const [flagError, setFlagError] = useState<string | null>(null);
+  const [flagSaving, setFlagSaving] = useState(false);
+  // Bumped after this page creates a payout so the payout and item tables refetch too.
+  const [version, setVersion] = useState(0);
 
   function reload() {
     api.get<AccountDetailData>(`/accounts/${id}`).then(setAccount);
+    setVersion((v) => v + 1);
   }
   useEffect(reload, [id]);
 
+  async function setStoreAccount(isStoreAccount: boolean) {
+    const prompt = isStoreAccount
+      ? "Mark this as a store account? Its sales will no longer credit a balance and it can't receive payouts."
+      : "Unmark this as a store account? Future sales of its items will credit a balance it can be paid out from.";
+    if (!window.confirm(prompt)) return;
+    setFlagError(null);
+    setFlagSaving(true);
+    try {
+      await api.patch(`/accounts/${id}`, { isStoreAccount });
+      reload();
+    } catch (err) {
+      setFlagError(err instanceof ApiError ? err.message : "Could not update the account.");
+    } finally {
+      setFlagSaving(false);
+    }
+  }
+
+  // The list's "Latest Payout" link lands here as #payouts; React Router doesn't
+  // scroll to hash targets, and the section only exists once the account has loaded.
+  const { hash } = useLocation();
+  useEffect(() => {
+    if (account && hash === "#payouts") document.getElementById("payouts")?.scrollIntoView({ block: "start" });
+  }, [account, hash]);
+
   if (!account) return <div className="p-8 text-gray-500">Loading…</div>;
   const showsBalance = account.currentBalance !== undefined;
+  const canFlag = !!user && CAN_CREATE_ROLES.includes(user.activeRole) && FLAGGABLE_TYPES.includes(account.accountType);
 
   return (
-    <div className="p-8 max-w-4xl">
+    <div className="p-8 max-w-6xl">
       <BackToAccounts />
       <div className="flex justify-between items-start mt-4 mb-6">
         <div>
           <h2 className="text-2xl font-bold">{account.name}</h2>
-          <Badge>{account.accountType}</Badge>
+          <div className="flex gap-2 items-center">
+            <Badge>{account.accountType}</Badge>
+            {account.isStoreAccount && <Badge tone="warning">Store account</Badge>}
+          </div>
+          {canFlag && (
+            <label className="flex items-center gap-2 mt-3 text-xs cursor-pointer">
+              <input
+                type="checkbox"
+                checked={account.isStoreAccount}
+                disabled={flagSaving}
+                onChange={(e) => setStoreAccount(e.target.checked)}
+              />
+              Store account (store-owned — no balance or payouts)
+            </label>
+          )}
+          {flagError && <p className="text-crimson text-xs mt-1">{flagError}</p>}
         </div>
         {showsBalance && account.currentBalance! > 0 && (
           <Button
@@ -298,80 +360,11 @@ function AccountDetail({ id }: { id: string }) {
         </div>
       </Card>
 
-      {showsBalance && (
-        <>
-          <h3 className="text-xs uppercase font-bold border-b border-gold inline-block pb-1 mb-3">
-            Payout History ({account.payouts.length})
-          </h3>
-          <table className="w-full text-sm mb-8">
-            <thead>
-              <tr className="text-[10px] uppercase text-gray-500">
-                <th className="p-2 text-left">Date</th>
-                <th className="p-2 text-left">Status</th>
-                <th className="p-2 text-right">Items</th>
-                <th className="p-2 text-right">Amount</th>
-              </tr>
-            </thead>
-            <tbody>
-              {account.payouts.map((p) => (
-                <tr key={p.id} className="border-b border-gray-100 hover:bg-bone/50">
-                  <td className="p-2">
-                    <Link to={`/accounts/${id}/payouts/${p.id}`} className="font-bold hover:text-crimson hover:underline">
-                      {formatDate(p.paidAt ?? p.createdAt)}
-                    </Link>
-                  </td>
-                  <td className="p-2">
-                    <Badge>{p.status}</Badge>
-                  </td>
-                  <td className="p-2 text-right">{p.itemCount || "—"}</td>
-                  <td className="p-2 text-right font-bold">{money(p.amount)}</td>
-                </tr>
-              ))}
-              {account.payouts.length === 0 && (
-                <tr>
-                  <td className="p-4 text-gray-400 text-center" colSpan={4}>
-                    No payouts yet.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </>
+      {(showsBalance || account.payoutCount > 0) && (
+        <AccountPayouts accountId={id} payoutCount={account.payoutCount} version={version} />
       )}
 
-      <h3 className="text-xs uppercase font-bold border-b border-gold inline-block pb-1 mb-3">
-        Items ({account.itemCount})
-      </h3>
-      {account.itemCount > account.items.length && (
-        <p className="text-xs text-gray-500 mb-2">
-          Showing the {account.items.length} most recently received — search Inventory for the rest.
-        </p>
-      )}
-      <table className="w-full text-sm">
-        <tbody>
-          {account.items.map((i) => (
-            <tr key={i.id} className="border-b border-gray-100">
-              <td className="p-2 font-mono text-xs">
-                <Link to={`/inventory/${i.id}`} className="hover:text-crimson hover:underline">
-                  {i.sku}
-                </Link>
-              </td>
-              <td className="p-2">{i.description}</td>
-              <td className="p-2">
-                <Badge>{i.status}</Badge>
-              </td>
-              <td className="p-2 text-right font-bold">{money(i.price)}</td>
-            </tr>
-          ))}
-          {account.items.length === 0 && (
-            <tr>
-              <td className="p-4 text-gray-400 text-center" colSpan={4}>
-                No items yet.
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
+      <AccountItems accountId={id} itemCount={account.itemCount} version={version} />
     </div>
   );
 }
@@ -393,6 +386,7 @@ function BackToAccounts() {
 
 interface PayoutDetailData {
   id: string;
+  payoutNumber: number;
   amount: number;
   status: string;
   createdAt: string;
@@ -445,7 +439,10 @@ function PayoutDetail({ accountId, payoutId }: { accountId: string; payoutId: st
             {payout.account.name}
           </Link>
         </div>
-        <h2 className="text-2xl font-bold">{formatDate(payout.paidAt ?? payout.createdAt)}</h2>
+        <h2 className="text-2xl font-bold">
+          Payout #{payout.payoutNumber}
+          <span className="ml-3 text-base font-normal text-gray-500">{formatDate(payout.paidAt ?? payout.createdAt)}</span>
+        </h2>
       </div>
 
       <Card className="mb-6 flex flex-wrap gap-10">
@@ -539,11 +536,13 @@ function AddAccountModal({
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [splitPercent, setSplitPercent] = useState("");
+  const [isStoreAccount, setIsStoreAccount] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const tabLabel = TABS.find((t) => t.type === accountType)?.label.replace(/s$/, "") ?? accountType;
-  const showsSplit = accountType !== "DONOR";
+  const canBeStoreAccount = FLAGGABLE_TYPES.includes(accountType);
+  const showsSplit = accountType !== "DONOR" && !isStoreAccount;
 
   async function handleCreate() {
     setError(null);
@@ -555,6 +554,7 @@ function AddAccountModal({
         email: email || undefined,
         phone: phone || undefined,
         splitPercent: showsSplit && splitPercent ? Number(splitPercent) : undefined,
+        isStoreAccount: canBeStoreAccount ? isStoreAccount : undefined,
       });
       onCreated();
     } catch (err) {
@@ -594,6 +594,12 @@ function AddAccountModal({
             <label className="block text-[10px] font-bold uppercase text-gray-500 mb-1">Phone</label>
             <input value={phone} onChange={(e) => setPhone(e.target.value)} className="w-full border border-ink p-2" />
           </div>
+          {canBeStoreAccount && (
+            <label className="flex items-center gap-2 text-xs cursor-pointer">
+              <input type="checkbox" checked={isStoreAccount} onChange={(e) => setIsStoreAccount(e.target.checked)} />
+              Store account (the shop's own — no balance or payouts; lists under the Store tab)
+            </label>
+          )}
           {showsSplit && (
             <div>
               <label className="block text-[10px] font-bold uppercase text-gray-500 mb-1">Split % (their share)</label>

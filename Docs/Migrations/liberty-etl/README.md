@@ -19,17 +19,18 @@ Server Express into the `dist-bin/` Windows package (see "Windows / native SQL S
 Express" below). `scripts/migrate.ts` had to learn to populate `Item.itemNumber`
 (required since the `20260915011122_add_item_number` schema migration, which postdates
 the first run) — assigned gapless 1..N in intake order, and `npm run validate` now
-checks that.
-
-Two items remain excluded from this run, decided project-side (not by Sherry
-directly — see spec §9) to unblock the migration rather than guess with real money on
-the line:
+checks that. Later the same weekend the migration also gained: `PayoutLine`
+itemization from `CLIENT_TRANS.PAYOUT_ID`, `Account.createdAt` from
+`CLIENT.CREATE_TS`, `Payout.payoutNumber` = Liberty's `PAYOUT_ID`, and (2026-10-11)
+the type-3 accounts below.
 
 - **The `CLIENT_TYPE_ID = 3` ("Store Account") accounts** (~46 rows, at least 3
-  different real meanings mixed under one type code) and **`CLIENT_ID 101508`** (a
-  corrupted ~$2 billion ledger balance) are excluded from every run of
-  `scripts/migrate.ts` — see `reports/client_type_3_review.md` for the list still
-  waiting on Sherry's sort, and spec §9 for the other open questions.
+  different real meanings mixed under one type code) are **migrated as `CONSIGNOR`
+  accounts flagged `isStoreAccount`** (2026-10-11; they were excluded until then), with
+  balances zeroed. `reports/client_type_3_review.md` lists the few that look like real
+  vendors/people for Sherry to confirm — staff unflag those in the app.
+- **`CLIENT_ID 101508`** (a corrupted ~$2 billion ledger balance) is still excluded
+  from every run, with its items and payouts — see spec §9.
 - `scripts/create-test-login.ts` is now superseded by `config/store.yaml`-driven user
   creation inside `scripts/migrate.ts` itself (see below) — kept around only as a
   quick way to mint an extra smoke-test login against a scratch DB.
@@ -37,7 +38,10 @@ the line:
 ### `config/store.yaml`
 
 Defines the shop's identity (name/location — authoritative over whatever free text
-ended up in Liberty's own `STORE` table) and every login `scripts/migrate.ts` should
+ended up in Liberty's own `STORE` table), the tag numbering for items entered in
+Teabox afterwards (`items: { prefix, startNumber }` — `startNumber: auto` = the next
+round number above Liberty's highest `ITEM_ID`, e.g. 1,162,674 → 2,000,000; migrated
+items keep `LIB-<ITEM_ID>` with `itemNumber = ITEM_ID`) and every login `scripts/migrate.ts` should
 create: the owner (always granted `OWNER`) plus a slot for every other Teabox `Role`.
 Staff-role entries are `{name, email, password}`; account-scoped role entries
 (`CONSIGNOR`/`VENDOR`/`DONOR`/`BOOTH_OWNER`) also need `account:` matching a migrated

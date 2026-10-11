@@ -1,12 +1,30 @@
+import type { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 import { BALANCE_BEARING_ACCOUNT_TYPES, type AccountType } from "../lib/enums";
 
-// Donor accounts are never owed money. This trims financial fields out of the API
-// response entirely (rather than just hiding them in the UI) so a Donor profile
-// cannot leak a balance to any client, per app_flow_document.md's account-type rules.
+// THE rule for "is this account owed money": its type must be balance-bearing AND it
+// must not be flagged as one of the store's own accounts (Account.isStoreAccount —
+// e.g. a per-year "2019 Inventory" bucket, which is store-owned stock under a
+// CONSIGNOR type). Balance credits at checkout, payouts, balance display and the
+// payout reports all go through this; don't test BALANCE_BEARING_ACCOUNT_TYPES alone.
+export function isBalanceBearing(account: { accountType: string; isStoreAccount: boolean }): boolean {
+  return BALANCE_BEARING_ACCOUNT_TYPES.includes(account.accountType as AccountType) && !account.isStoreAccount;
+}
+
+// Prisma `where` fragment matching exactly the accounts isBalanceBearing() accepts.
+export const BALANCE_BEARING_WHERE = {
+  accountType: { in: BALANCE_BEARING_ACCOUNT_TYPES as string[] },
+  isStoreAccount: false,
+} satisfies Prisma.AccountWhereInput;
+
+// Donor and store-owned accounts are never owed money. This trims financial fields out
+// of the API response entirely (rather than just hiding them in the UI) so such a
+// profile cannot leak a balance to any client, per app_flow_document.md's
+// account-type rules.
 export function serializeAccount(account: {
   id: string;
   accountType: string;
+  isStoreAccount: boolean;
   name: string;
   email: string | null;
   phone: string | null;
@@ -15,17 +33,17 @@ export function serializeAccount(account: {
   lastSaleAt: Date | null;
   createdAt: Date;
 }) {
-  const showsBalance = BALANCE_BEARING_ACCOUNT_TYPES.includes(account.accountType as AccountType);
   return {
     id: account.id,
     accountType: account.accountType,
+    isStoreAccount: account.isStoreAccount,
     name: account.name,
     email: account.email,
     phone: account.phone,
     splitPercent: account.splitPercent,
     createdAt: account.createdAt,
     lastSaleAt: account.lastSaleAt,
-    ...(showsBalance ? { currentBalance: account.currentBalance } : {}),
+    ...(isBalanceBearing(account) ? { currentBalance: account.currentBalance } : {}),
   };
 }
 
@@ -75,13 +93,29 @@ export async function generatePaidPayout(account: {
     lines.push({ lineType: "ADJUSTMENT", description: "Balance not attributable to itemized sales", amount: remainder });
   }
 
-  const [payout] = await prisma.$transaction([
-    prisma.payout.create({
-      data: { accountId: account.id, amount, status: "PAID", paidAt: new Date(), lines: { create: lines } },
-    }),
-    prisma.account.update({ where: { id: account.id }, data: { currentBalance: 0 } }),
-  ]);
-  return payout;
+  return prisma.$transaction(async (tx) => {
+    const payout = await tx.payout.create({
+      data: {
+        payoutNumber: await nextPayoutNumber(tx),
+        accountId: account.id,
+        amount,
+        status: "PAID",
+        paidAt: new Date(),
+        lines: { create: lines },
+      },
+    });
+    await tx.account.update({ where: { id: account.id }, data: { currentBalance: 0 } });
+    return payout;
+  });
+}
+
+// Payout.payoutNumber for a new payout. Call inside the same interactive transaction
+// as the create — SQLite serializes writer transactions, so max+1 is race-free there
+// (same reasoning as Item.itemNumber in items.routes.ts). Continues after the highest
+// existing number, so it also continues a migrated system's numbering.
+export async function nextPayoutNumber(tx: Prisma.TransactionClient): Promise<number> {
+  const { _max } = await tx.payout.aggregate({ _max: { payoutNumber: true } });
+  return (_max.payoutNumber ?? 0) + 1;
 }
 
 function roundCents(n: number): number {

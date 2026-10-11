@@ -4,7 +4,7 @@ import { useAuth } from "../auth/AuthContext";
 import { ROLES, ROLE_LABELS, type Role } from "../auth/roles";
 import { Button, Card } from "../components/Card";
 
-const TABS = ["Profile", "Users & Permissions", "Notifications", "Hardware", "Cloud Vault", "Blockchain"] as const;
+const TABS = ["Profile", "Store", "Users & Permissions", "Notifications", "Hardware", "Cloud Vault", "Blockchain"] as const;
 
 export function SettingsPage() {
   const { user } = useAuth();
@@ -28,6 +28,7 @@ export function SettingsPage() {
       </nav>
       <div className="flex-1 p-8 overflow-y-auto">
         {tab === "Profile" && <ProfileTab />}
+        {tab === "Store" && <StoreTab canEdit={isAdmin} />}
         {tab === "Users & Permissions" && isAdmin && <UsersTab />}
         {tab === "Notifications" && <NotificationsTab />}
         {tab === "Hardware" && <HardwareTab />}
@@ -67,6 +68,113 @@ function ProfileTab() {
         Save
       </Button>
       {saved && <p className="text-crimson text-sm mt-2">Saved.</p>}
+    </Card>
+  );
+}
+
+interface StoreSettings {
+  name: string;
+  location: string | null;
+  itemPrefix: string;
+  itemStartNumber: number;
+  highestItemNumber: number; // 0 when the store has no items
+  nextItemNumber: number;
+  nextSku: string;
+}
+
+// Item numbering: new items get "<prefix>-<number>", numbered one past the store's
+// highest item number but never below the starting number (server:
+// items.service.ts nextItemIdentity). Owner/Admin edit; Managers see it read-only.
+function StoreTab({ canEdit }: { canEdit: boolean }) {
+  const [settings, setSettings] = useState<StoreSettings | null>(null);
+  const [prefix, setPrefix] = useState("");
+  const [start, setStart] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  function load(next: StoreSettings) {
+    setSettings(next);
+    setPrefix(next.itemPrefix);
+    setStart(String(next.itemStartNumber));
+  }
+  useEffect(() => {
+    api.get<StoreSettings>("/settings/store").then(load);
+  }, []);
+
+  if (!settings) return <div className="text-gray-500">Loading…</div>;
+  const startNumber = Number(start);
+  const startValid = Number.isInteger(startNumber) && startNumber > 0;
+  const prefixValid = /^[A-Z0-9]{1,8}$/.test(prefix);
+  const startBelowExisting = startValid && startNumber <= settings.highestItemNumber;
+
+  return (
+    <Card className="max-w-lg">
+      <h2 className="font-bold uppercase text-sm mb-1">Store</h2>
+      <p className="text-sm mb-4">
+        {settings.name}
+        {settings.location && <span className="text-gray-500"> · {settings.location}</span>}
+      </p>
+
+      <h3 className="font-bold uppercase text-xs mb-1">Item numbering</h3>
+      <p className="text-xs text-gray-500 mb-3">
+        New items are tagged <span className="font-mono">PREFIX-NUMBER</span>, counting up from the store's highest item
+        number — never below the starting number.
+      </p>
+      <label className="block text-xs font-bold uppercase mb-1">Prefix</label>
+      <input
+        value={prefix}
+        disabled={!canEdit}
+        onChange={(e) => {
+          setPrefix(e.target.value.toUpperCase());
+          setSaved(false);
+        }}
+        maxLength={8}
+        className="w-40 border border-ink p-2 mb-1 font-mono disabled:bg-gray-100"
+      />
+      {!prefixValid && <p className="text-crimson text-xs mb-2">Use 1–8 letters or digits.</p>}
+      <label className="block text-xs font-bold uppercase mb-1 mt-3">Starting number</label>
+      <input
+        type="number"
+        min="1"
+        value={start}
+        disabled={!canEdit}
+        onChange={(e) => {
+          setStart(e.target.value);
+          setSaved(false);
+        }}
+        className="w-40 border border-ink p-2 mb-1 disabled:bg-gray-100"
+      />
+      {startBelowExisting && (
+        <p className="text-xs text-gray-500 mb-2">
+          Items already go up to {settings.highestItemNumber.toLocaleString()}, so numbering will continue from{" "}
+          {(settings.highestItemNumber + 1).toLocaleString()}.
+        </p>
+      )}
+      <p className="text-sm mt-3 mb-4">
+        Next item: <span className="font-mono font-bold">{settings.nextSku}</span>
+      </p>
+      {canEdit ? (
+        <>
+          <Button
+            disabled={!prefixValid || !startValid}
+            onClick={async () => {
+              setError(null);
+              try {
+                load(await api.put<StoreSettings>("/settings/store", { itemPrefix: prefix, itemStartNumber: startNumber }));
+                setSaved(true);
+              } catch (err) {
+                setError(err instanceof ApiError ? err.message : "Could not save.");
+              }
+            }}
+          >
+            Save
+          </Button>
+          {saved && <p className="text-crimson text-sm mt-2">Saved.</p>}
+          {error && <p className="text-crimson text-sm mt-2">{error}</p>}
+        </>
+      ) : (
+        <p className="text-xs text-gray-500">Only an Owner or Admin can change item numbering.</p>
+      )}
     </Card>
   );
 }
