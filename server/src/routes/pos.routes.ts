@@ -95,6 +95,7 @@ posRouter.post("/checkout", async (req, res) => {
       where: { id: item.id },
       data: {
         status: "SOLD",
+        soldAt: sale.saleDate, // denormalized for Inventory sorting — see schema.prisma
         history: {
           create: [
             {

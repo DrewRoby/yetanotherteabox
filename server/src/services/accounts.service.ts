@@ -93,6 +93,7 @@ export async function generatePaidPayout(account: {
     lines.push({ lineType: "ADJUSTMENT", description: "Balance not attributable to itemized sales", amount: remainder });
   }
 
+  const paidAt = new Date();
   return prisma.$transaction(async (tx) => {
     const payout = await tx.payout.create({
       data: {
@@ -100,11 +101,14 @@ export async function generatePaidPayout(account: {
         accountId: account.id,
         amount,
         status: "PAID",
-        paidAt: new Date(),
+        paidAt,
         lines: { create: lines },
       },
     });
     await tx.account.update({ where: { id: account.id }, data: { currentBalance: 0 } });
+    // Item.paidOutAt is denormalized for Inventory sorting/filtering (see schema.prisma).
+    const itemIds = lines.flatMap((l) => (l.itemId ? [l.itemId] : []));
+    if (itemIds.length) await tx.item.updateMany({ where: { id: { in: itemIds } }, data: { paidOutAt: paidAt } });
     return payout;
   });
 }

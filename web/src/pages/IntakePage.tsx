@@ -4,12 +4,7 @@ import { api, ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { Button, Card } from "../components/Card";
 import { Barcode } from "../components/Barcode";
-
-interface AccountOption {
-  id: string;
-  name: string;
-  accountType: string;
-}
+import { AccountPicker, type AccountOption } from "../components/AccountPicker";
 
 interface CvSuggestion {
   brand?: string;
@@ -34,8 +29,9 @@ export function IntakePage() {
   const isAccountScoped = user ? ACCOUNT_SCOPED_ROLES.includes(user.activeRole) : false;
 
   const [ownAccount, setOwnAccount] = useState<{ name: string; accountType: string } | null>(null);
-  const [accountOptions, setAccountOptions] = useState<AccountOption[]>([]);
-  const [selectedAccountId, setSelectedAccountId] = useState("");
+  // Stays selected across saves, so a whole drop-off for one consignor is entered
+  // without re-picking the account each time.
+  const [selectedAccount, setSelectedAccount] = useState<AccountOption | null>(null);
 
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState("");
@@ -57,14 +53,10 @@ export function IntakePage() {
     if (!user) return;
     if (isAccountScoped) {
       api.get<{ name: string; accountType: string }>("/accounts/me/profile").then(setOwnAccount);
-    } else {
-      api.get<AccountOption[]>("/accounts").then((accounts) => {
-        setAccountOptions(accounts);
-      });
     }
   }, [user, isAccountScoped]);
 
-  const accountReady = isAccountScoped ? !!ownAccount : !!selectedAccountId;
+  const accountReady = isAccountScoped ? !!ownAccount : !!selectedAccount;
 
   async function handleCapture() {
     setCapturing(true);
@@ -90,7 +82,7 @@ export function IntakePage() {
           brand: brand || undefined,
           size: size || undefined,
           price: Number(price),
-          accountId: isAccountScoped ? undefined : selectedAccountId,
+          accountId: isAccountScoped ? undefined : selectedAccount?.id,
         }
       );
       setResult({ sku: res.item.sku });
@@ -166,18 +158,14 @@ export function IntakePage() {
             <div className="text-sm text-gray-400">Loading your account…</div>
           )
         ) : (
-          <select
-            value={selectedAccountId}
-            onChange={(e) => setSelectedAccountId(e.target.value)}
-            className="border border-ink px-3 py-2 bg-white w-96"
-          >
-            <option value="">— Select target account (required) —</option>
-            {accountOptions.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name} ({a.accountType})
-              </option>
-            ))}
-          </select>
+          <div className="max-w-md">
+            <AccountPicker
+              value={selectedAccount}
+              onChange={setSelectedAccount}
+              placeholder="Search for the target account (required) — name, email or phone"
+              autoFocus
+            />
+          </div>
         )}
       </Card>
 

@@ -6,7 +6,7 @@ import { Badge, Button, Card } from "../components/Card";
 import { AccountItems } from "./accounts/AccountItems";
 import { AccountPayouts } from "./accounts/AccountPayouts";
 import { formatDate, money } from "./accounts/format";
-import { Pager, rangeLabel } from "./accounts/Pager";
+import { Pager, rangeLabel } from "../components/Pager";
 
 interface AccountRow {
   id: string;

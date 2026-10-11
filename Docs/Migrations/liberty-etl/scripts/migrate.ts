@@ -337,6 +337,17 @@ async function main() {
     `Created ${payoutLineRows.length} PayoutLine rows (${skippedLinesForUnmigratedPayout} skipped — payout not in this batch).`
   );
 
+  // Item.soldAt / paidOutAt (denormalized for Inventory sorting) — same backfill SQL as
+  // the add_item_sold_paid_dates schema migration.
+  await prisma.$executeRawUnsafe(`UPDATE "Item" SET "soldAt" = (SELECT MAX(s."saleDate") FROM "Sale" s WHERE s."itemId" = "Item"."id");`);
+  await prisma.$executeRawUnsafe(`
+    UPDATE "Item" SET "paidOutAt" = (
+      SELECT MAX(COALESCE(p."paidAt", p."createdAt")) FROM "PayoutLine" l
+      JOIN "Payout" p ON p."id" = l."payoutId"
+      WHERE l."itemId" = "Item"."id" AND p."status" <> 'REJECTED'
+    );`);
+  console.log("Stamped Item.soldAt / paidOutAt.");
+
   // ---- Users & UserRoles (config/store.yaml — see its header comment) ----
   const accountIdByName = new Map<string, string>(
     [...accountRows, { id: storeAccountId, name: "Store-Owned Inventory" }].map((a) => [a.name.trim().toLowerCase(), a.id])

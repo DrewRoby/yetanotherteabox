@@ -3,14 +3,16 @@ import { Link, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../../api/client";
 import { Badge, Button } from "../../components/Card";
 import { formatDate, localDayStartMs, money } from "./format";
-import { Pager, rangeLabel } from "./Pager";
+import { Pager, rangeLabel } from "../../components/Pager";
 
 // The account detail page's Items table. Filtering, sorting and paging all happen
 // server-side (GET /accounts/:id/items) — an account can own ~340k items. Every
 // control lives in the URL so following an item/payout link and coming back keeps it.
 
 const ITEM_STATUSES = ["PENDING", "AVAILABLE", "SOLD", "DONATED", "DISPOSED", "RETURNED"];
-type SortKey = "sku" | "description" | "status" | "price" | "created" | "sold" | "payout";
+// "paidOut" sorts the Payout # column by payout date — the same order, since payout
+// numbers only grow — through the indexed Item.paidOutAt column.
+type SortKey = "sku" | "description" | "status" | "price" | "created" | "sold" | "paidOut";
 const DEFAULT_DESC: Record<SortKey, boolean> = {
   sku: false,
   description: false,
@@ -18,7 +20,7 @@ const DEFAULT_DESC: Record<SortKey, boolean> = {
   price: true,
   created: true,
   sold: true,
-  payout: true,
+  paidOut: true,
 };
 const FILTER_KEYS = ["q", "status", "sold", "paid", "payout", "createdFrom", "createdTo", "soldFrom", "soldTo"];
 const PAGE_SIZE = 50;
@@ -232,7 +234,7 @@ export function AccountItems({
                 {header("price", "Price", "right")}
                 {header("created", "Created")}
                 {header("sold", "Sold")}
-                {header("payout", "Payout #")}
+                {header("paidOut", "Payout #")}
               </tr>
             </thead>
             <tbody>

@@ -6,7 +6,7 @@ import { authenticate } from "../middleware/auth";
 import { requireRole } from "../middleware/requireRole";
 import { recordAudit } from "../lib/audit";
 import { ACCOUNT_TYPES, BALANCE_BEARING_ACCOUNT_TYPES, ITEM_STATUSES, type AccountType } from "../lib/enums";
-import { ITEM_SORTS, listAccountItems } from "../services/accountItems.service";
+import { itemListQuerySchema, listItems } from "../services/itemList.service";
 import { generatePaidPayout, isBalanceBearing, nextPayoutNumber, serializeAccount } from "../services/accounts.service";
 
 export const accountsRouter = Router();
@@ -130,51 +130,21 @@ accountsRouter.get(
   }
 );
 
-const itemsQuerySchema = z.object({
-  q: z.string().trim().min(1).optional(),
-  status: z.enum(ITEM_STATUSES).optional(),
-  sold: z.enum(["yes", "no"]).optional(),
-  paid: z.enum(["yes", "no"]).optional(),
-  payout: z.coerce.number().int().positive().optional(),
-  createdFrom: dateParam.optional(),
-  createdTo: dateParam.optional(),
-  soldFrom: dateParam.optional(),
-  soldTo: dateParam.optional(),
-  sort: z.enum(ITEM_SORTS).default("created"),
-  dir: z.enum(["asc", "desc"]).default("desc"),
-  page: z.coerce.number().int().min(1).default(1),
-  pageSize: z.coerce.number().int().min(1).max(200).default(50),
-});
-
-// The account detail page's Items table — see services/accountItems.service.ts.
+// The account detail page's Items table — services/itemList.service.ts, scoped to the account.
 accountsRouter.get(
   "/:id/items",
   requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER", "EMPLOYEE"),
   async (req, res) => {
-    const parsed = itemsQuerySchema.safeParse(req.query);
+    const parsed = itemListQuerySchema.safeParse(req.query);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
     const account = await prisma.account.findFirst({
       where: { id: req.params.id, storeId: req.session!.storeId },
       select: { id: true },
     });
     if (!account) return res.status(404).json({ error: "Account not found" });
-    const q = parsed.data;
-    const result = await listAccountItems(account.id, {
-      q: q.q,
-      status: q.status,
-      sold: q.sold,
-      paid: q.paid,
-      payoutNumber: q.payout,
-      createdFrom: q.createdFrom,
-      createdTo: q.createdTo,
-      soldFrom: q.soldFrom,
-      soldTo: q.soldTo,
-      sort: q.sort,
-      desc: q.dir === "desc",
-      limit: q.pageSize,
-      offset: (q.page - 1) * q.pageSize,
-    });
-    res.json({ ...result, page: q.page, pageSize: q.pageSize });
+    const { query, page, pageSize } = parsed.data;
+    const result = await listItems({ storeId: req.session!.storeId, accountId: account.id }, query);
+    res.json({ ...result, page, pageSize });
   }
 );
 

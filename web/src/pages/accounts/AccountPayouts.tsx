@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../../api/client";
 import { Badge, Button } from "../../components/Card";
 import { formatDate, localDayStartMs, money } from "./format";
-import { Pager, rangeLabel } from "./Pager";
+import { Pager, rangeLabel } from "../../components/Pager";
 
 // The account detail page's Payout History: newest first, PAGE_SIZE at a time, with a
 // date range and a search over the descriptions of the items each payout covered.

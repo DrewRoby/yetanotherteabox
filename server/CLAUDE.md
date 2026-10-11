@@ -212,15 +212,22 @@ owe $X" to "nobody is owed anything" must go through a payout, not a checkbox. A
 flagged account keeps its historical payouts (`GET /:id` returns payouts for every
 account).
 
-**Account items** (`GET /:id/items`, `services/accountItems.service.ts`): the detail
-page's item table, filtered/sorted/paged **server-side** (`q`, `status`, `sold`,
-`paid`, `payout`, `createdFrom/To`, `soldFrom/To` as epoch ms, `sort`, `dir`, `page`).
-Derived columns — `soldAt` (latest sale) and the latest payout containing the item —
-are raw SQL, computed only for the returned page unless the sort/filter needs them
-across the whole account. Consignors (≤ ~6k items) answer in ≤ ~150ms; sorting the
-~340k-item migrated STORE account by sold date or payout takes 3–5s and is accepted
-as-is. "Created" is `intakeDate` (a migrated item's `createdAt` is the migration day).
-`GET /:id` returns only `itemCount` and `payoutCount` — no items or payouts.
+**Item lists** (`services/itemList.service.ts`): one filtered/sorted/paged query behind
+both the Inventory page (`GET /items/browse`, whole store) and an account's Items table
+(`GET /accounts/:id/items`, same query scoped to the account), with one shared
+query-string parser (`itemListQuerySchema`: `q`, `status`, `category`, `sold`,
+`paid`, `payout`, `createdFrom/To`, `soldFrom/To`, `paidFrom/To` as epoch ms, `sort`,
+`dir`, `page`, `pageSize`). Sale/payout dates sort and filter through the
+**denormalized `Item.soldAt` / `Item.paidOutAt`** (stamped by POS checkout and
+`generatePaidPayout()`; anything inserting sales/payout lines another way must run the
+`add_item_sold_paid_dates` migration's backfill SQL) with `(storeId, …)` and
+`(accountId, …)` indexes — computing them live was ~7s store-wide. Sorting by those
+dates pages two segments (dated rows, then undated) instead of `NULLS LAST`, which
+defeats the index (~1s vs ~150ms on ~900k items). Only the per-row payout *number* is
+looked up, for the returned page. "Created" is `intakeDate` (a migrated item's
+`createdAt` is the migration day). `GET /items/categories` feeds the Inventory
+category dropdown. `GET /items` (plain array, capped) stays for Booth Owner Pricing.
+`GET /accounts/:id` returns only `itemCount` and `payoutCount` — no items or payouts.
 
 **Account payouts** (`GET /:id/payouts?q=&from=&to=&page=&pageSize=`, default 5 per page,
 newest first): `q` keeps payouts containing an item whose description includes it, and

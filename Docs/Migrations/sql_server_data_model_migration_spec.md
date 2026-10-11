@@ -1,4 +1,4 @@
-<!-- migration-spec-freshness: schema.prisma=98bfe593 enums.ts=770b0724 -->
+<!-- migration-spec-freshness: schema.prisma=cc02b562 enums.ts=770b0724 -->
 # Teabox ERP — Data Model Migration Spec (SQL Server source)
 
 Status: **living document**. Update this file whenever the Prisma schema
@@ -463,6 +463,7 @@ Settings → Users & Permissions (`DELETE /settings/users/roles/:userRoleId`).
 |---|---|---|---|
 | `id` | `String` (cuid) | PK | Fresh cuid — but see §7.3 on preserving the source ID for cross-reference. |
 | `sku` | `String` | **unique**, required | Also the value encoded onto the printed barcode tag (`web/src/components/Barcode.tsx`) and matched on POS scan lookup. If the source system's SKU/tag numbers are themselves unique per shop, reuse them verbatim (better for staff continuity — physical tags already printed with old SKUs stay valid). If the source allows SKU reuse across time (e.g. recycled tag numbers) or the format collides with Teabox's own generator (`formatBarcode()`, `server/src/lib/barcode.ts` — `${Store.itemPrefix}-${itemNumber}`), namespace migrated SKUs distinctly (e.g. a prefix) so they're recognizable. |
+| `soldAt` / `paidOutAt` | `DateTime?` | | Denormalized: latest `Sale.saleDate`, and latest date of a non-`REJECTED` `Payout` with a line for the item. They drive Inventory sorting/filtering. The live app stamps them; a migration inserting `Sale`/`PayoutLine` rows directly must backfill both afterward with the `add_item_sold_paid_dates` schema migration's `UPDATE`s (re-runnable as-is). Validated by `liberty-etl`'s `npm run validate`. |
 | `itemNumber` | `Int` | **required**, unique per `storeId` (`@@unique([storeId, itemNumber])`) | **Must equal the number encoded in the item's `sku`** (Liberty: `itemNumber = ITEM_ID` for `LIB-<ITEM_ID>`). New items take one past the store's highest `itemNumber` (floor `Store.itemStartNumber`), and that's only collision-free if every existing SKU encodes its own number. Not required to be gapless. (Before 2026-10-11 it had to be gapless 1..N, because intake used `count + 1`.) |
 | `description` | `String` | required | |
 | `category` | `String` | required, free text (no enum) | No longer feeds SKU generation (that now comes from `itemNumber`, not `category`); purely descriptive/filterable metadata. |

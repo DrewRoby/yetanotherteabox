@@ -1,4 +1,4 @@
-// First / previous / "Page N of M" / next / last — shared by the Accounts list, an
+// First / previous / "Page N of M" / next / last — shared by the Inventory page, the Accounts list, an
 // account's Payout History and its Items table. Renders nothing for a single page.
 // `labels` overrides the buttons' accessible names where "page" order has a meaning
 // of its own (e.g. payouts: newest → oldest).

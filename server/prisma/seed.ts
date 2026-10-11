@@ -148,7 +148,9 @@ async function main() {
     }
   }
 
-  // Sales above bypass POS checkout, which is what normally stamps lastSaleAt.
+  // Sales above bypass POS checkout, which is what normally stamps Item.soldAt and
+  // Account.lastSaleAt.
+  await prisma.$executeRawUnsafe(`UPDATE "Item" SET "soldAt" = (SELECT MAX(s."saleDate") FROM "Sale" s WHERE s."itemId" = "Item"."id");`);
   await prisma.$executeRawUnsafe(`
     UPDATE "Account" SET "lastSaleAt" = (
       SELECT MAX(s."saleDate") FROM "Item" i JOIN "Sale" s ON s."itemId" = i."id" WHERE i."accountId" = "Account"."id"

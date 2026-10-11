@@ -6,6 +6,7 @@ import { requireRole } from "../middleware/requireRole";
 import { recordAudit } from "../lib/audit";
 import { ITEM_STATUSES } from "../lib/enums";
 import { IntakeAccountError, nextItemIdentity, resolveIntakeAccountId } from "../services/items.service";
+import { itemListQuerySchema, listCategories, listItems } from "../services/itemList.service";
 import { printTagBatch } from "../adapters/printer";
 import { suggestMetadata } from "../adapters/cv";
 
@@ -36,6 +37,22 @@ itemsRouter.get("/", requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER", "EMPLOYEE")
     take: 200,
   });
   res.json(items);
+});
+
+// Inventory page: the whole store's items, filtered/sorted/paged server-side — see
+// services/itemList.service.ts. (GET / above stays as-is for the Booth Owner Pricing
+// page, which wants a plain array for one account.) Registered before GET /:id so
+// "browse"/"categories" aren't taken for item ids.
+itemsRouter.get("/browse", requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER", "EMPLOYEE"), async (req, res) => {
+  const parsed = itemListQuerySchema.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const { query, page, pageSize } = parsed.data;
+  const result = await listItems({ storeId: req.session!.storeId }, query);
+  res.json({ ...result, page, pageSize });
+});
+
+itemsRouter.get("/categories", requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER", "EMPLOYEE"), async (req, res) => {
+  res.json(await listCategories(req.session!.storeId));
 });
 
 itemsRouter.get("/:id", async (req, res) => {

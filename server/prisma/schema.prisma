@@ -112,8 +112,8 @@ model Account {
 
 // `status` is one of: PENDING, AVAILABLE, SOLD, DONATED, DISPOSED, RETURNED.
 model Item {
-  id              String   @id @default(cuid())
-  sku             String   @unique // barcode value: formatBarcode(storeId, itemNumber) — see src/lib/barcode.ts
+  id              String    @id @default(cuid())
+  sku             String    @unique // barcode value: formatBarcode(storeId, itemNumber) — see src/lib/barcode.ts
   itemNumber      Int // sequential per store, assigned alongside sku in the same transaction (src/routes/items.routes.ts)
   description     String
   category        String
@@ -125,16 +125,23 @@ model Item {
   serialNumber    String?
   condition       String?
   consignmentType String? // e.g. "Traditional Consignment", "Buy-Outright", "Booth Rental", "Donation"
-  status          String   @default("AVAILABLE")
-  intakeDate      DateTime @default(now())
+  status          String    @default("AVAILABLE")
+  intakeDate      DateTime  @default(now())
   priceQuickSale  Float?
   price           Float // "standard" price — the sale price
   pricePremium    Float?
   cost            Float? // acquisition cost basis, e.g. for buy-outright/trade items. No current write path (see server/CLAUDE.md).
   accountId       String
   storeId         String
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  // Denormalized for sorting/filtering ~1M items (computing them live took ~7s store-wide):
+  // soldAt = latest Sale.saleDate, stamped by POS checkout; paidOutAt = latest date of a
+  // non-REJECTED Payout with a line for this item, stamped by generatePaidPayout(). Anything
+  // that writes sales/payout lines another way (seed, migrations) must backfill both — see
+  // the add_item_sold_paid_dates migration for the canonical SQL.
+  soldAt          DateTime?
+  paidOutAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   account     Account       @relation(fields: [accountId], references: [id])
   store       Store         @relation(fields: [storeId], references: [id])
@@ -146,6 +153,16 @@ model Item {
   @@unique([storeId, itemNumber])
   @@index([storeId, status])
   @@index([accountId])
+  @@index([storeId, intakeDate])
+  @@index([storeId, soldAt])
+  @@index([storeId, paidOutAt])
+  @@index([storeId, category])
+  // Same three sorts scoped to one account (its Items table): without these SQLite walks
+  // the store-wide date index filtering by account — seconds for an account whose
+  // items are old.
+  @@index([accountId, intakeDate])
+  @@index([accountId, soldAt])
+  @@index([accountId, paidOutAt])
 }
 
 model ItemHistory {

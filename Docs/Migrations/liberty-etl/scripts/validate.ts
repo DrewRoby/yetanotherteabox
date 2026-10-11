@@ -81,6 +81,12 @@ async function main() {
     where: { lastSaleAt: null, items: { some: { sales: { some: {} } } } },
   });
   check("every account with a sale has lastSaleAt", soldWithoutLastSale === 0, `${soldWithoutLastSale} missing`);
+  const soldWithoutSoldAt = await prisma.item.count({ where: { soldAt: null, sales: { some: {} } } });
+  check("every item with a sale has soldAt", soldWithoutSoldAt === 0, `${soldWithoutSoldAt} missing`);
+  const paidWithoutPaidOutAt = await prisma.item.count({
+    where: { paidOutAt: null, payoutLines: { some: { payout: { status: { not: "REJECTED" } } } } },
+  });
+  check("every item on a non-rejected payout has paidOutAt", paidWithoutPaidOutAt === 0, `${paidWithoutPaidOutAt} missing`);
 
   // 8. Item.status defaults — never silently AVAILABLE for ambiguous source states.
   // (Enforced in transform/crosswalks.ts's mapItemStatus; this just reports the

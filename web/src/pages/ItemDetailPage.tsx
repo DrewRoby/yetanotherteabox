@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { Badge, Button, Card } from "../components/Card";
 import { Barcode } from "../components/Barcode";
+import { AccountPicker, type AccountOption } from "../components/AccountPicker";
 
 interface ItemDetail {
   id: string;
@@ -26,13 +27,6 @@ interface ItemDetail {
   history: { id: string; changeType: string; oldValue: string | null; newValue: string | null; timestamp: string }[];
   sales: { id: string; saleDate: string; salePrice: number }[];
   _count: { payoutLines: number };
-}
-
-interface AccountOption {
-  id: string;
-  name: string;
-  accountType: string;
-  isStoreAccount: boolean;
 }
 
 // Mirrors server/src/routes/items.routes.ts PATCH/DELETE /items/:id — the server is the
@@ -434,7 +428,7 @@ function EditItemForm({
           {sold || !canChangePriceAndAccount ? (
             <input value={item.account.name} disabled className={input} />
           ) : (
-            <AccountPicker value={account} onChange={setAccount} />
+            <AccountPicker value={account} onChange={setAccount} placeholder="Type to search accounts…" />
           )}
         </div>
       </div>
@@ -454,68 +448,6 @@ function EditItemForm({
           Cancel
         </Button>
       </div>
-    </div>
-  );
-}
-
-// Type-to-search over every account in the store (a few thousand, loaded once). Shows
-// the type so duplicate names (e.g. several "Hidden Treasures" store accounts) can be
-// told apart.
-function AccountPicker({ value, onChange }: { value: AccountOption; onChange: (a: AccountOption) => void }) {
-  const [accounts, setAccounts] = useState<AccountOption[] | null>(null);
-  const [query, setQuery] = useState("");
-  const [open, setOpen] = useState(false);
-
-  useEffect(() => {
-    api.get<AccountOption[]>("/accounts").then(setAccounts);
-  }, []);
-
-  const matches = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!accounts || !q) return [];
-    return accounts.filter((a) => a.name.toLowerCase().includes(q)).slice(0, 8);
-  }, [accounts, query]);
-
-  const typeLabel = (a: AccountOption) => (a.isStoreAccount ? "STORE ACCOUNT" : a.accountType);
-
-  return (
-    <div className="relative">
-      <input
-        value={open ? query : `${value.name} (${typeLabel(value)})`}
-        onFocus={() => {
-          setQuery("");
-          setOpen(true);
-        }}
-        onBlur={() => setTimeout(() => setOpen(false), 150)}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder={accounts ? "Type to search accounts…" : "Loading accounts…"}
-        className="w-full border border-ink p-2 bg-white"
-      />
-      {open && matches.length > 0 && (
-        <ul className="absolute z-10 left-0 right-0 bg-white border border-ink border-t-0 max-h-64 overflow-y-auto">
-          {matches.map((a) => (
-            <li key={a.id}>
-              <button
-                type="button"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => {
-                  onChange(a);
-                  setOpen(false);
-                }}
-                className="w-full text-left px-2 py-1.5 text-sm hover:bg-bone flex justify-between gap-2"
-              >
-                <span>{a.name}</span>
-                <span className="text-[10px] text-gray-500 uppercase">{typeLabel(a)}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      {open && query.trim() && accounts && matches.length === 0 && (
-        <div className="absolute z-10 left-0 right-0 bg-white border border-ink border-t-0 px-2 py-1.5 text-sm text-gray-500">
-          No matching accounts.
-        </div>
-      )}
     </div>
   );
 }
