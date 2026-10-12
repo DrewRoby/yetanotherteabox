@@ -27,6 +27,7 @@ export interface LibertyClientRow {
   PAYMENT_ACT_ID: number | null;
   CREATE_TS: Date | null;
   ACTIVE_TS: Date | null;
+  INACTIVE_TS: Date | null;
   LAST_UPDATE_TS: Date | null;
 }
 
@@ -38,7 +39,7 @@ export async function fetchOrdinaryClients(): Promise<LibertyClientRow[]> {
   const pool = await getPool();
   const result = await pool.request().query(`
     SELECT CLIENT_ID, CLIENT_TYPE_ID, FIRST_NAME, LAST_NAME, COMPANY_NAME,
-           DEF_PRICE_CODE_ID, PAYMENT_ACT_ID, CREATE_TS, ACTIVE_TS, LAST_UPDATE_TS
+           DEF_PRICE_CODE_ID, PAYMENT_ACT_ID, CREATE_TS, ACTIVE_TS, INACTIVE_TS, LAST_UPDATE_TS
     FROM CLIENT
     WHERE CLIENT_TYPE_ID IN (1, 2, 3) AND CLIENT_ID <> 101508;
   `);

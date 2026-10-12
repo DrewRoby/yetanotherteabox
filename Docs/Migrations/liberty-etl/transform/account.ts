@@ -21,6 +21,7 @@ export interface TransformedAccount {
   libertyClientId: number;
   accountType: "CONSIGNOR" | "VENDOR";
   isStoreAccount: boolean;
+  isActive: boolean;
   name: string;
   phone: string | null;
   email: string | null;
@@ -60,6 +61,10 @@ export function transformClientToAccount(client: LibertyClientRow, lookups: Acco
     // Liberty "Store Account" (type 3): the shop's own buckets (per-year "20XX
     // Inventory", "Hidden Treasures 2019", ...). Store-owned in Teabox: no balance.
     isStoreAccount: client.CLIENT_TYPE_ID === 3,
+    // Liberty has no active flag, only timestamps: inactive = an INACTIVE_TS not
+    // followed by a later ACTIVE_TS (reactivation). Barely used at Hidden Treasures —
+    // 2 of 3,651 clients have INACTIVE_TS, 1 since reactivated (2026-10-12 backup).
+    isActive: !(client.INACTIVE_TS && (!client.ACTIVE_TS || client.ACTIVE_TS <= client.INACTIVE_TS)),
     name,
     phone: lookups.phoneByClientId.get(client.CLIENT_ID)?.trim() || null,
     email: lookups.emailByClientId.get(client.CLIENT_ID)?.trim() || null,

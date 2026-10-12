@@ -21,6 +21,10 @@ export async function resolveIntakeAccountId(
     if (!session.accountId) {
       throw new IntakeAccountError("Session has no linked account to intake against");
     }
+    const own = await prisma.account.findUnique({ where: { id: session.accountId }, select: { isActive: true } });
+    if (!own?.isActive) {
+      throw new IntakeAccountError("Your account is inactive — please ask the store to reactivate it");
+    }
     return session.accountId;
   }
 
@@ -32,6 +36,11 @@ export async function resolveIntakeAccountId(
   });
   if (!account) {
     throw new IntakeAccountError("accountId does not belong to this store");
+  }
+  // Inactive = dormant; new consignments mean it's active again, which should be a
+  // deliberate reactivation on the account page rather than happen silently.
+  if (!account.isActive) {
+    throw new IntakeAccountError(`${account.name} is inactive — reactivate it on its account page first`);
   }
   return account.id;
 }

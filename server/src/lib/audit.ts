@@ -22,3 +22,23 @@ export async function recordAudit(
     },
   });
 }
+
+// Same as recordAudit, for many entities in one statement (bulk actions) — one entry
+// per entity, so each one's history reads the same as if it had been changed alone.
+export async function recordAuditMany(
+  session: SessionClaims,
+  entity: string,
+  entries: { entityId: string; action: string; details?: Record<string, unknown> }[]
+) {
+  if (entries.length === 0) return;
+  await prisma.auditLog.createMany({
+    data: entries.map((e) => ({
+      entity,
+      entityId: e.entityId,
+      action: e.action,
+      performedById: session.sub,
+      activeRole: session.activeRole,
+      details: e.details ? JSON.stringify(e.details) : undefined,
+    })),
+  });
+}

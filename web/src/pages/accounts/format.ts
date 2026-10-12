@@ -4,8 +4,10 @@ export function formatDate(iso: string | null | undefined): string {
   return iso ? new Date(iso).toLocaleDateString() : "—";
 }
 
+// "$540,593.82" / "-$12.50" — thousands separators; balances run to six figures.
 export function money(n: number): string {
-  return `$${n.toFixed(2)}`;
+  const abs = Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `${n < 0 ? "-" : ""}$${abs}`;
 }
 
 // Date inputs give a local calendar day ("2024-03-05"); the server compares epoch ms,

@@ -343,6 +343,7 @@ itemsRouter.patch("/:id", requireRole(...STAFF_ROLES), async (req, res) => {
   if (accountChanged) {
     const target = await prisma.account.findFirst({ where: { id: input.accountId, storeId: session.storeId } });
     if (!target) return res.status(400).json({ error: "That account doesn't belong to this store" });
+    if (!target.isActive) return res.status(400).json({ error: `${target.name} is inactive — reactivate it before moving items to it` });
     const current = await prisma.account.findUniqueOrThrow({ where: { id: item.accountId }, select: { name: true } });
     accountNote = `account: ${current.name} → ${target.name}`;
   }

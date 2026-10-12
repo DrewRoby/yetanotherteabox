@@ -203,6 +203,21 @@ amount. `consignorShareOf()` there is the one split formula, shared with checkou
 "Payout #"; migrated ones keep the source system's number) from `nextPayoutNumber()`
 inside the creating transaction — any new payout-creating path must do the same.
 
+**Active flag.** `Account.isActive` (default true; Liberty migrates its one genuinely
+inactive client). Inactive = dormant: `GET /` filters `?status=active` by default
+(`inactive`/`all` on request — and every account picker calls `GET /`, so pickers only
+offer active accounts); the dashboard's pending-payout total and `GET /reports/payouts`
+count active accounts only; intake (`resolveIntakeAccountId`) and moving an item
+(`PATCH /items/:id`) to an inactive account are refused (400) — reactivating is a
+deliberate step. The balance itself is untouched, POS still credits it, and it can still
+be paid out. Toggled by `PATCH /:id { isActive }` (Owner/Manager/Admin, audited
+`DEACTIVATE`/`REACTIVATE`); never on the built-in STORE account. In bulk by
+`POST /bulk-status { accountIds, isActive }` (same roles/rules; STORE skipped; ids from
+another store refuse the whole request; one audit entry per changed account via
+`recordAuditMany`, details `{ bulk: true }`). `GET /` also returns `lastIntakeAt` and
+`lastActivityAt` (latest intake/sale/payout) — the intake MAX is a correlated subquery on
+the `(accountId, intakeDate)` index (~30ms; `groupBy` over Item was ~1.3s).
+
 **Store-account flag.** `GET /?accountType=STORE` (the Store tab) returns the built-in
 `STORE` account plus every `isStoreAccount` account; any other `accountType` excludes
 flagged ones. `PATCH /:id { isStoreAccount }` (Owner/Manager/Admin, audited

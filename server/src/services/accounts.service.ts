@@ -25,6 +25,7 @@ export function serializeAccount(account: {
   id: string;
   accountType: string;
   isStoreAccount: boolean;
+  isActive: boolean;
   name: string;
   email: string | null;
   phone: string | null;
@@ -37,6 +38,7 @@ export function serializeAccount(account: {
     id: account.id,
     accountType: account.accountType,
     isStoreAccount: account.isStoreAccount,
+    isActive: account.isActive,
     name: account.name,
     email: account.email,
     phone: account.phone,

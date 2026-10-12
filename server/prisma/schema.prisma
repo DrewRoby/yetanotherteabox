@@ -98,6 +98,7 @@ model Account {
   splitPercent   Int? // consignor/vendor/booth-owner revenue share, e.g. 60
   currentBalance Float     @default(0)
   isStoreAccount Boolean   @default(false) // an extra store-owned account (e.g. a shop's per-year "2019 Inventory" bucket): store-owned rules like the STORE type, but keeps its own accountType/history — see isBalanceBearing() in src/services/accounts.service.ts
+  isActive       Boolean   @default(true) // false = dormant: hidden from default lists/pickers, excluded from payout-obligation totals, no new intake; balance kept — see server/CLAUDE.md "Accounts"
   lastSaleAt     DateTime? // denormalized MAX(Sale.saleDate) over this account's items — stamped by POS checkout, so the Accounts list doesn't aggregate ~1M sales per load
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt

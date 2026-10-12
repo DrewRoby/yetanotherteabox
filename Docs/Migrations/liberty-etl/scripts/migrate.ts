@@ -166,6 +166,7 @@ async function main() {
       storeId,
       accountType: t.accountType,
       isStoreAccount: t.isStoreAccount,
+      isActive: t.isActive,
       name: t.name,
       phone: t.phone,
       email: t.email,

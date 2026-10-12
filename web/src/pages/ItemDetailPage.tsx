@@ -5,6 +5,7 @@ import { useAuth } from "../auth/AuthContext";
 import { Badge, Button, Card } from "../components/Card";
 import { Barcode } from "../components/Barcode";
 import { AccountPicker, type AccountOption } from "../components/AccountPicker";
+import { money as formatMoney } from "./accounts/format";
 
 interface ItemDetail {
   id: string;
@@ -51,7 +52,7 @@ const PRICE_FIELDS: { key: "price" | "priceQuickSale" | "pricePremium"; label: s
   { key: "pricePremium", label: "Premium Price" },
 ];
 
-const money = (n: number | null | undefined) => (n == null ? "—" : `$${n.toFixed(2)}`);
+const money = (n: number | null | undefined) => (n == null ? "—" : formatMoney(n));
 const date = (iso: string) => new Date(iso).toLocaleDateString();
 
 export function ItemDetailPage() {

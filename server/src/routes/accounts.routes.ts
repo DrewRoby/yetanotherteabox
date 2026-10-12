@@ -4,7 +4,7 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { authenticate } from "../middleware/auth";
 import { requireRole } from "../middleware/requireRole";
-import { recordAudit } from "../lib/audit";
+import { recordAudit, recordAuditMany } from "../lib/audit";
 import { ACCOUNT_TYPES, BALANCE_BEARING_ACCOUNT_TYPES, ITEM_STATUSES, type AccountType } from "../lib/enums";
 import { itemListQuerySchema, listItems } from "../services/itemList.service";
 import { generatePaidPayout, isBalanceBearing, nextPayoutNumber, serializeAccount } from "../services/accounts.service";
@@ -30,6 +30,10 @@ accountsRouter.get("/", requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER", "EMPLOYE
       : accountType
         ? { accountType, isStoreAccount: false }
         : {};
+  // ?status=active (default) | inactive | all — inactive (dormant) accounts stay out of
+  // the default list and every account picker (which also call this endpoint).
+  const status = req.query.status === "inactive" || req.query.status === "all" ? req.query.status : "active";
+  if (status !== "all") tabWhere.isActive = status === "active";
   const accounts = await prisma.account.findMany({
     where: { storeId: req.session!.storeId, ...tabWhere },
     orderBy: { name: "asc" },
@@ -45,7 +49,29 @@ accountsRouter.get("/", requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER", "EMPLOYE
     _max: { createdAt: true },
   });
   const lastPayoutAtByAccount = new Map(latestPayouts.map((p) => [p.accountId, p._max.createdAt]));
-  res.json(accounts.map((a) => ({ ...serializeAccount(a), lastPayoutAt: lastPayoutAtByAccount.get(a.id) ?? null })));
+  // Latest intake per account: a correlated MAX riding the (accountId, intakeDate) index
+  // (~30ms for ~3.6k accounts; Prisma's groupBy over Item took ~1.3s).
+  const intakeRows = await prisma.$queryRaw<{ id: string; lastIntakeAt: bigint | number | null }[]>`
+    SELECT a."id", (SELECT MAX(i."intakeDate") FROM "Item" i WHERE i."accountId" = a."id") AS "lastIntakeAt"
+    FROM "Account" a WHERE a."storeId" = ${req.session!.storeId}`;
+  const lastIntakeAtByAccount = new Map(
+    intakeRows.map((r) => [r.id, r.lastIntakeAt == null ? null : new Date(Number(r.lastIntakeAt))])
+  );
+  res.json(
+    accounts.map((a) => {
+      const lastPayoutAt = lastPayoutAtByAccount.get(a.id) ?? null;
+      const lastIntakeAt = lastIntakeAtByAccount.get(a.id) ?? null;
+      // "Last activity" = latest intake, sale or payout — what the Accounts list's
+      // "No activity since" filter (bulk deactivation of dormant accounts) keys on.
+      const times = [lastIntakeAt, a.lastSaleAt, lastPayoutAt].filter((d): d is Date => d != null).map((d) => d.getTime());
+      return {
+        ...serializeAccount(a),
+        lastPayoutAt,
+        lastIntakeAt,
+        lastActivityAt: times.length ? new Date(Math.max(...times)) : null,
+      };
+    })
+  );
 });
 
 accountsRouter.get(
@@ -221,31 +247,95 @@ accountsRouter.post("/", requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER"), async 
   res.status(201).json(serializeAccount(account));
 });
 
-const updateAccountSchema = z.object({ isStoreAccount: z.boolean() });
+const updateAccountSchema = z
+  .object({ isStoreAccount: z.boolean().optional(), isActive: z.boolean().optional() })
+  .refine((v) => v.isStoreAccount !== undefined || v.isActive !== undefined, "Nothing to update");
 
-// Flag/unflag an account as one of the store's own (store-owned rules: no balance
-// credits, no payouts — see isBalanceBearing). Only for the balance-bearing types;
-// the built-in STORE account and DONOR accounts are already never owed money.
-// Flagging is refused while money is still owed: an account can't go from "we owe $X"
-// to "nobody is owed anything" without a payout recording where that money went.
+// Account flags (Owner/Manager/Admin, each change audited):
+// - isStoreAccount: store-owned rules (no balance credits, no payouts — see
+//   isBalanceBearing). Only for the balance-bearing types; the built-in STORE account
+//   and DONOR accounts are already never owed money. Flagging is refused while money
+//   is still owed: an account can't go from "we owe $X" to "nobody is owed anything"
+//   without a payout recording where that money went.
+// - isActive: false = dormant (hidden from default lists and pickers, left out of
+//   payout-obligation totals, no new intake). The balance is untouched, so
+//   deactivating needs no such guard. Any account but the built-in STORE one.
 accountsRouter.patch("/:id", requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER"), async (req, res) => {
   const parsed = updateAccountSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const account = await prisma.account.findFirst({ where: { id: req.params.id, storeId: req.session!.storeId } });
   if (!account) return res.status(404).json({ error: "Account not found" });
-  if (!BALANCE_BEARING_ACCOUNT_TYPES.includes(account.accountType as AccountType)) {
-    return res.status(400).json({ error: `${account.accountType} accounts can't be flagged as store accounts` });
+  const { isStoreAccount, isActive } = parsed.data;
+  const data: Prisma.AccountUpdateInput = {};
+
+  if (isStoreAccount !== undefined && isStoreAccount !== account.isStoreAccount) {
+    if (!BALANCE_BEARING_ACCOUNT_TYPES.includes(account.accountType as AccountType)) {
+      return res.status(400).json({ error: `${account.accountType} accounts can't be flagged as store accounts` });
+    }
+    if (isStoreAccount && Math.abs(account.currentBalance) >= 0.005) {
+      return res.status(409).json({
+        error: `This account still has a balance of ${account.currentBalance.toFixed(2)}. Pay it out before marking it as a store account.`,
+      });
+    }
+    data.isStoreAccount = isStoreAccount;
   }
-  const { isStoreAccount } = parsed.data;
-  if (isStoreAccount === account.isStoreAccount) return res.json(serializeAccount(account));
-  if (isStoreAccount && Math.abs(account.currentBalance) >= 0.005) {
-    return res.status(409).json({
-      error: `This account still has a balance of $${account.currentBalance.toFixed(2)}. Pay it out before marking it as a store account.`,
+  if (isActive !== undefined && isActive !== account.isActive) {
+    if (account.accountType === "STORE") {
+      return res.status(400).json({ error: "The store's own built-in account can't be made inactive" });
+    }
+    data.isActive = isActive;
+  }
+  if (Object.keys(data).length === 0) return res.json(serializeAccount(account));
+
+  const updated = await prisma.account.update({ where: { id: account.id }, data });
+  if (data.isStoreAccount !== undefined) {
+    await recordAudit(req.session!, "Account", account.id, isStoreAccount ? "FLAG_STORE_ACCOUNT" : "UNFLAG_STORE_ACCOUNT", {});
+  }
+  if (data.isActive !== undefined) {
+    await recordAudit(req.session!, "Account", account.id, isActive ? "REACTIVATE" : "DEACTIVATE", {
+      currentBalance: account.currentBalance,
     });
   }
-  const updated = await prisma.account.update({ where: { id: account.id }, data: { isStoreAccount } });
-  await recordAudit(req.session!, "Account", account.id, isStoreAccount ? "FLAG_STORE_ACCOUNT" : "UNFLAG_STORE_ACCOUNT", {});
   res.json(serializeAccount(updated));
+});
+
+const bulkStatusSchema = z.object({
+  accountIds: z.array(z.string().min(1)).min(1).max(10000),
+  isActive: z.boolean(),
+});
+
+// Bulk activate/deactivate — the Accounts list's select mode. Same rules as
+// PATCH /:id { isActive } (built-in STORE account is skipped, never deactivated), one
+// audit entry per account changed. Ids from another store are refused outright.
+accountsRouter.post("/bulk-status", requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER"), async (req, res) => {
+  const parsed = bulkStatusSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const { isActive } = parsed.data;
+  const ids = [...new Set(parsed.data.accountIds)];
+  const accounts = await prisma.account.findMany({
+    where: { id: { in: ids }, storeId: req.session!.storeId },
+    select: { id: true, accountType: true, isActive: true, currentBalance: true },
+  });
+  if (accounts.length !== ids.length) {
+    return res.status(400).json({ error: "One or more accounts don't belong to this store" });
+  }
+  const toChange = accounts.filter((a) => a.accountType !== "STORE" && a.isActive !== isActive);
+  await prisma.$transaction(async (tx) => {
+    await tx.account.updateMany({ where: { id: { in: toChange.map((a) => a.id) } }, data: { isActive } });
+  });
+  await recordAuditMany(
+    req.session!,
+    "Account",
+    toChange.map((a) => ({
+      entityId: a.id,
+      action: isActive ? "REACTIVATE" : "DEACTIVATE",
+      details: { bulk: true, currentBalance: a.currentBalance },
+    }))
+  );
+  res.json({
+    updated: toChange.length,
+    unchanged: accounts.length - toChange.length, // already in that state, or the built-in STORE account
+  });
 });
 
 const payoutRequestSchema = z.object({ amount: z.number().positive().optional() });

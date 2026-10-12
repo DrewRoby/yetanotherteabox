@@ -69,7 +69,9 @@ reportsRouter.get(
         _count: true,
       }),
       prisma.item.count({ where: { storeId, status: "PENDING" } }),
-      prisma.account.findMany({ where: { storeId, ...BALANCE_BEARING_WHERE } }),
+      // Outstanding payout obligations: active accounts only — a dormant (inactive)
+      // account's balance is kept on the account but not counted as owed here.
+      prisma.account.findMany({ where: { storeId, ...BALANCE_BEARING_WHERE, isActive: true } }),
       prisma.heartbeat.findUnique({ where: { storeId } }),
     ]);
     const pendingPayoutTotal = accounts.reduce((sum, a) => sum + a.currentBalance, 0);
@@ -155,6 +157,7 @@ reportsRouter.get(
       where: {
         storeId: req.session!.storeId,
         ...BALANCE_BEARING_WHERE,
+        isActive: true, // dormant accounts aren't listed as owed — see /dashboard
       },
       orderBy: { currentBalance: "desc" },
     });

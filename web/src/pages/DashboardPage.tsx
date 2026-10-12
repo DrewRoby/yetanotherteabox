@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { Badge, Button, Card, StatCard } from "../components/Card";
+import { money } from "./accounts/format";
 
 interface DashboardData {
   totalInventory: number;
@@ -35,11 +36,11 @@ export function DashboardPage() {
       {data ? (
         <div className="grid grid-cols-4 gap-6">
           <StatCard label="Total Inventory" value={data.totalInventory} sub="items available" />
-          <StatCard label="Daily Sales" value={`$${data.dailySalesTotal.toFixed(2)}`} sub={`${data.dailySalesCount} transactions today`} />
+          <StatCard label="Daily Sales" value={money(data.dailySalesTotal)} sub={`${data.dailySalesCount} transactions today`} />
           <StatCard label="Pending Intake" value={data.pendingIntake} sub="awaiting inspection" />
           <StatCard
             label="Consignor Payouts"
-            value={`$${data.pendingPayoutTotal.toFixed(2)}`}
+            value={money(data.pendingPayoutTotal)}
             sub={`${data.activeAccounts} active accounts`}
           />
 
