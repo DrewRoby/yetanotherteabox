@@ -7,7 +7,7 @@ import { recordAudit } from "../lib/audit";
 import { ITEM_STATUSES } from "../lib/enums";
 import { IntakeAccountError, nextItemIdentity, resolveIntakeAccountId } from "../services/items.service";
 import { itemListQuerySchema, listCategories, listItems } from "../services/itemList.service";
-import { printTagBatch } from "../adapters/printer";
+import { loadPrintableItems, printItemsAsJob } from "../services/printJobs.service";
 import { suggestMetadata } from "../adapters/cv";
 
 export const itemsRouter = Router();
@@ -162,40 +162,30 @@ itemsRouter.post("/", async (req, res) => {
   res.status(201).json({ item });
 });
 
-const printBatchSchema = z.object({ itemIds: z.array(z.string()).min(1) });
+const printBatchSchema = z.object({
+  itemIds: z.array(z.string()).min(1),
+  // Label for Reports > Print Queues only ("INTAKE" from IntakePage's Tag Batch, "ITEM"
+  // from an item page's Reprint); doesn't change what is printed.
+  source: z.enum(["INTAKE", "ITEM"]).default("INTAKE"),
+});
 
-// Sends one print job per item to the label printer, called once from IntakePage's
-// "Print Batch" action after a clerk has queued up several intake tickets. Re-reads
-// each item from the DB rather than trusting client-supplied ticket text, so a
-// tampered price/description can't reach the printer — same isAccountScoped-or-staff
-// check as GET /:id, since a Consignor/Booth Owner may only reprint their own items.
+// Prints a batch of tags as one print job (see services/printJobs.service.ts), called
+// from IntakePage's "Print Batch" once a clerk has queued several intake tickets, and
+// from an item page's Reprint. Re-reads each item from the DB rather than trusting
+// client-supplied ticket text, so a tampered price/description can't reach the printer
+// — same staff-or-own-account check as GET /:id, since a Consignor/Booth Owner may only
+// print their own items.
 itemsRouter.post("/print-batch", async (req, res) => {
   const parsed = printBatchSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
   const session = req.session!;
-  const items = await prisma.item.findMany({
-    where: { id: { in: parsed.data.itemIds }, storeId: session.storeId },
-  });
-  const isStaff = ["SYSTEM_ADMIN", "OWNER", "MANAGER", "EMPLOYEE"].includes(session.activeRole);
-  const authorized = items.filter((item) => isStaff || session.accountId === item.accountId);
-  if (authorized.length !== parsed.data.itemIds.length) {
+  const items = await loadPrintableItems(session, parsed.data.itemIds);
+  if (!items) {
     return res.status(403).json({ error: "Not authorized to print tags for one or more of these items" });
   }
-
-  const results = await printTagBatch(
-    authorized.map((item) => ({
-      sku: item.sku,
-      description: item.description,
-      price: item.price,
-      category: item.category,
-      size: item.size ?? undefined,
-    }))
-  );
-  for (const item of authorized) {
-    await recordAudit(session, "Item", item.id, "PRINT_TAG", { sku: item.sku });
-  }
-  res.json({ printed: results });
+  const { job, results } = await printItemsAsJob(session, items, parsed.data.source);
+  res.json({ printJobId: job.id, printed: results });
 });
 
 // Computer-vision metadata suggestion stub, called after a photo is captured on the

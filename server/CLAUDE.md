@@ -31,11 +31,13 @@ no shared package).
 - `User` — auth identity only (email/passwordHash/name, plus `badgeCodeHash`/`badgeIssuedAt` for sign-in-sheet badges — see "Sign-in-sheet badges" below). Never carries roles directly.
 - `UserRole` — `(userId, role, storeId, accountId?)`. One row per role a person holds; a user with both `MANAGER` and `CONSIGNOR` rows still only acts as one per session. `accountId` set for account-scoped roles (Consignor/Vendor/Donor/Booth Owner) — links the grant to the `Account` it acts on.
 - `Store` — one per shop. `itemPrefix`/`itemStartNumber` drive new item tags (see "Barcode values").
-- `Account` — polymorphic party items/payouts attach to: `accountType ∈ {CONSIGNOR, VENDOR, DONOR, BOOTH_OWNER, STORE}`. Every store has exactly one `STORE`-type account (store-owned inventory) so intake always has a target. `isStoreAccount` flags *additional* store-owned accounts (a shop's per-year "2019 Inventory" buckets, kept separate for their history) under an ordinary `CONSIGNOR`/`VENDOR`/`BOOTH_OWNER` type. **`isBalanceBearing()` (`src/services/accounts.service.ts`) is the one rule for "is this account owed money"** — balance-bearing type *and* not flagged; checkout credits, payouts, `serializeAccount()`'s balance stripping (Donor/Store/flagged — removed from the API response, not just hidden in the UI) and the payout reports (`BALANCE_BEARING_WHERE`) all use it. Don't test `BALANCE_BEARING_ACCOUNT_TYPES` alone. `isActive` = dormant flag (see "Active flag" under Accounts). `lastSaleAt` is denormalized (see Accounts). `mailingAddress` (free text, like `Store.location`) and `paymentMethod` have **no current write path** — populated only by direct SQL (e.g. a migration), not reachable via any route or UI today.
+- `Account` — polymorphic party items/payouts attach to: `accountType ∈ {CONSIGNOR, VENDOR, DONOR, BOOTH_OWNER, STORE}`. Every store has exactly one `STORE`-type account (store-owned inventory) so intake always has a target. `isStoreAccount` flags *additional* store-owned accounts (a shop's per-year "2019 Inventory" buckets, kept separate for their history) under an ordinary `CONSIGNOR`/`VENDOR`/`BOOTH_OWNER` type. **`isBalanceBearing()` (`src/services/accounts.service.ts`) is the one rule for "is this account owed money"** — balance-bearing type *and* not flagged; checkout credits, payouts, `serializeAccount()`'s balance stripping (Donor/Store/flagged — removed from the API response, not just hidden in the UI) and the dashboard's pending-payout total (`BALANCE_BEARING_WHERE`) all use it. Don't test `BALANCE_BEARING_ACCOUNT_TYPES` alone. `isActive` = dormant flag (see "Active flag" under Accounts). `lastSaleAt` is denormalized (see Accounts). `mailingAddress` (free text, like `Store.location`) and `paymentMethod` have **no current write path** — populated only by direct SQL (e.g. a migration), not reachable via any route or UI today.
 - `Item` — `accountId` is **required** (no intake without an account). `status ∈ {PENDING, AVAILABLE, SOLD, DONATED, DISPOSED, RETURNED}`. `cost` (acquisition cost basis) has **no current write path**, same as `consignmentType`. `sku` is also the barcode value (see below) — POS scan lookup, the printed tag, and the web `Barcode` component all key off it. `itemNumber` (`@@unique([storeId, itemNumber])`) is the number encoded in `sku` — see "Barcode values" for the invariant. `soldAt`/`paidOutAt` are denormalized latest sale/payout dates for list sorting (see "Item lists").
 - `ItemHistory`, `Photo`, `Sale`, `Device`, `Heartbeat` — as named.
 - `Payout` — `payoutNumber` is the human-facing "Payout #" (migrated payouts keep the source system's number; new ones `nextPayoutNumber()`).
 - `PayoutLine` — itemization of a `Payout`; a `Sale` with a line counts as paid out. See "Accounts" below.
+- `Sale.transactionId` — the ticket (one checkout); see "POS" and "Reports".
+- `PrintJob` / `PrintJobItem` — every tag print run plus a snapshot of each tag; see "Ticket printing".
 - `AuditLog` — records `activeRole` alongside `performedById`, not just the user (security-doc requirement: interpret actions strictly in the role that performed them).
 
 ## Auth flow (`src/routes/auth.routes.ts`, `src/services/auth.service.ts`)
@@ -157,12 +159,23 @@ and logs the `INTAKE` history entry. Printing is a separate, explicit step: the 
 the printer a single time instead of once per item. Don't reintroduce a `printTag`
 call inside the intake handler.
 
-`print-batch` takes `{ itemIds: string[] }`, re-reads those items from the DB (never
-trusts client-supplied ticket text — a tampered price/description can't reach the
-printer that way), and applies the same staff-or-own-account authorization check as
-`GET /:id` — a Consignor/Booth Owner may only print tags for their own items. It calls
-`printTagBatch()`, which loops `printTag()` per item and returns one combined result
-set; one `PRINT_TAG` audit entry is recorded per item.
+`print-batch` takes `{ itemIds: string[], source?: "INTAKE" | "ITEM" }`, re-reads those
+items from the DB (never trusts client-supplied ticket text — a tampered
+price/description can't reach the printer that way), and applies the same
+staff-or-own-account authorization check as `GET /:id` (`loadPrintableItems()`) — a
+Consignor/Booth Owner may only print tags for their own items.
+
+**Every print goes through `printItemsAsJob()`** (`src/services/printJobs.service.ts`):
+it calls `printTagBatch()` and records one `PrintJob` (who, active role, `source`) with a
+`PrintJobItem` per tag snapshotting sku/description/price/category/size as printed,
+plus one `PRINT_TAG` audit entry per item (carrying `printJobId`). That's what Reports >
+Print Queues browses and reprints (`GET /reports/print-jobs`, `GET /reports/print-jobs/:id`,
+`POST /reports/print-jobs/:id/reprint { printJobItemIds? }`, Manager+). A reprint is a
+new job (`source: "REPRINT"`, `reprintOfId`) built from the items' *current* data;
+lines whose item was deleted are skipped (`PrintJobItem.itemId` is `SET NULL` on item
+delete; the snapshot stays). Any new printing path must use `printItemsAsJob()` so the
+run is retrievable. Prints from before print queues existed were backfilled from their
+`PRINT_TAG` audit rows by the `reporting_suite` migration, one single-tag job each.
 
 `TagTicket` (the adapter's input shape) carries `category` and `size` alongside
 `sku`/`description`/`price` so the printed tag can show department + size (the
@@ -207,8 +220,7 @@ inside the creating transaction — any new payout-creating path must do the sam
 **Active flag.** `Account.isActive` (default true; Liberty migrates its one genuinely
 inactive client). Inactive = dormant: `GET /` filters `?status=active` by default
 (`inactive`/`all` on request — and every account picker calls `GET /`, so pickers only
-offer active accounts); the dashboard's pending-payout total and `GET /reports/payouts`
-count active accounts only; intake (`resolveIntakeAccountId`) and moving an item
+offer active accounts); the dashboard's pending-payout total counts active accounts only; intake (`resolveIntakeAccountId`) and moving an item
 (`PATCH /items/:id`) to an inactive account are refused (400) — reactivating is a
 deliberate step. The balance itself is untouched, POS still credits it, and it can still
 be paid out. Toggled by `PATCH /:id { isActive }` (Owner/Manager/Admin, audited
@@ -277,13 +289,36 @@ fuzzy search over `AVAILABLE` items only (the "tagless item" modal). `POST /chec
 creates one `Sale` per cart line, flips items to `SOLD` (stamping `Item.soldAt`), stamps
 `Account.lastSaleAt`, and credits the owning account's balance by `consignorShareOf()` —
 only when `isBalanceBearing()` (so not Donor/Store/store-flagged accounts). Inactive
-accounts are still credited: money owed is real even on a dormant account.
+accounts are still credited: money owed is real even on a dormant account. Every line
+of one checkout shares a `transactionId` (UUID) and one `saleDate`, so reports count
+tickets, not lines.
 
 ## Reports (`src/routes/reports.routes.ts`)
 
-Aggregates computed live from Prisma, not cached. `localDateKey()` buckets by the
-server's **local** calendar day consistently for both range boundaries and bucket
-keys — see root `CLAUDE.md`'s gotcha list for why this matters. Also hosts the
+Aggregates computed live, not cached; logic in `src/services/salesReport.service.ts`.
+All day boundaries are the server's **local** calendar day (`localDateKey()`,
+`parseLocalDate()`, `addDays()` via `setDate`, never ms arithmetic or `toISOString()`)
+— see root `CLAUDE.md`'s gotcha list. Raw queries bind `getTime()` (Prisma stores
+SQLite DateTimes as integer epoch ms). Manager/Owner/Admin only.
+
+- `GET /sales-summary?date=&days=` — `periods` (day / week-to-date, Sunday start /
+  year-to-date, each `{ current, lastYear }` Metrics) plus a `days`-long `ledger`
+  (7/14/30/60/90), each row with its YoY comparable. **YoY = same weekday 52 weeks
+  back (364 days)** for day/week/ledger; YTD compares Jan 1 → same calendar date last
+  year. Metrics: `transactions` (`COUNT(DISTINCT COALESCE(transactionId, id))`),
+  `itemsSold`, `grossSales`, `inventoryAdded`/`itemsAdded` (tag value `Item.price` by
+  `intakeDate`), `payouts`/`payoutCount` (`PAID` payouts by `paidAt`). ~1s on the real
+  DB (YTD aggregates over ~40k rows each; `Payout @@index([paidAt])`).
+  `/sales-summary/export.csv` = the ledger with `ly_` columns.
+- `GET /day-detail?date=` — the day's metrics plus every sale (with `transactionId`),
+  intake, `PRICE_CHANGE` history entry (`ItemHistory @@index([timestamp])`), print job
+  and paid payout. Lists cap at 1000 rows and report `total` (migrated bulk-intake days).
+- Print queues — see "Ticket printing" above.
+
+Liberty-era transactions are nightly *posting batches* (the owner keys the day's paper
+tickets into Liberty each evening), so their `transactionId` groups aren't checkouts
+and their times are posting times; the UI says so. `/inventory-aging` and `/payouts`
+(Consignor Payout Statements) were removed 2026-10-12. Also hosts the
 sign-in-sheet badge endpoints (`/sign-in-sheet`, `/sign-in-sheet/issue`,
 `/sign-in-sheet/:userId`) — see "Sign-in-sheet badges" above.
 

@@ -36,6 +36,7 @@ model Store {
   items     Item[]
   devices   Device[]
   heartbeat Heartbeat?
+  printJobs PrintJob[]
 }
 
 // Auth identity only. Permissions never derive from this record directly — always
@@ -57,6 +58,7 @@ model User {
   itemHistories ItemHistory[]
   sales         Sale[]
   auditLogs     AuditLog[]
+  printJobs     PrintJob[]
 }
 
 // One row per role a person holds. A user with rows for both MANAGER and CONSIGNOR
@@ -150,6 +152,7 @@ model Item {
   history     ItemHistory[]
   sales       Sale[]
   payoutLines PayoutLine[]
+  printLines  PrintJobItem[]
 
   @@unique([storeId, itemNumber])
   @@index([storeId, status])
@@ -178,6 +181,8 @@ model ItemHistory {
 
   item      Item  @relation(fields: [itemId], references: [id])
   changedBy User? @relation(fields: [changedById], references: [id])
+
+  @@index([timestamp]) // Reports > Day Detail's "Priced" list (PRICE_CHANGE entries by day)
 }
 
 model Photo {
@@ -199,6 +204,10 @@ model Sale {
   registerName  String?
   processedById String?
   storeId       String
+  // One checkout = one transaction (ticket); every Sale from the same POS checkout shares
+  // it. Migrated sales carry "lib-<SALE_HDR.SALE_ID>". Null only for a sale with no known
+  // ticket — reports count those as their own transaction (COALESCE(transactionId, id)).
+  transactionId String?
 
   item        Item         @relation(fields: [itemId], references: [id])
   processedBy User?        @relation(fields: [processedById], references: [id])
@@ -221,6 +230,7 @@ model Payout {
   account Account      @relation(fields: [accountId], references: [id])
   lines   PayoutLine[]
 
+  @@index([paidAt]) // Reports: payouts paid per day/week/year
   @@index([accountId, createdAt]) // per-account payout history, newest first; also lets payout search start from the account's payouts instead of every PayoutLine
 }
 
@@ -279,4 +289,47 @@ model AuditLog {
   details       String? // JSON-encoded
 
   performedBy User? @relation(fields: [performedById], references: [id])
+}
+
+// One tag print run ("print queue"): every POST /items/print-batch and every reprint
+// from Reports > Print Queues creates one, so any batch can be found and printed again.
+// `source` is "INTAKE" | "ITEM" (item page reprint) | "REPRINT" (from a past job,
+// `reprintOfId`). See src/services/printJobs.service.ts.
+model PrintJob {
+  id          String   @id @default(cuid())
+  storeId     String
+  createdAt   DateTime @default(now())
+  createdById String?
+  activeRole  String?
+  source      String
+  reprintOfId String?
+  itemCount   Int
+
+  store     Store          @relation(fields: [storeId], references: [id])
+  createdBy User?          @relation(fields: [createdById], references: [id])
+  reprintOf PrintJob?      @relation("Reprints", fields: [reprintOfId], references: [id])
+  reprints  PrintJob[]     @relation("Reprints")
+  items     PrintJobItem[]
+
+  @@index([storeId, createdAt])
+}
+
+// One tag in a PrintJob, with a snapshot of what was printed on it (the item's price
+// or description may change later). `itemId` goes null if the item is deleted.
+model PrintJobItem {
+  id          String  @id @default(cuid())
+  printJobId  String
+  position    Int
+  itemId      String?
+  sku         String
+  description String
+  price       Float
+  category    String?
+  size        String?
+
+  printJob PrintJob @relation(fields: [printJobId], references: [id], onDelete: Cascade)
+  item     Item?    @relation(fields: [itemId], references: [id], onDelete: SetNull)
+
+  @@index([printJobId])
+  @@index([itemId])
 }

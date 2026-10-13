@@ -2,57 +2,24 @@ import { Router } from "express";
 import { prisma } from "../lib/prisma";
 import { authenticate } from "../middleware/auth";
 import { requireRole } from "../middleware/requireRole";
+import { Prisma } from "@prisma/client";
 import { BALANCE_BEARING_WHERE } from "../services/accounts.service";
+import { loadPrintableItems, printItemsAsJob } from "../services/printJobs.service";
+import {
+  addDays,
+  dayDetail,
+  localDateKey,
+  parseLocalDate,
+  salesLedger,
+  salesPeriods,
+  startOfLocalDay,
+} from "../services/salesReport.service";
 import { z } from "zod";
 import { recordAudit } from "../lib/audit";
 import { issueBadges, listBadgeEligibleUsers, revokeBadge } from "../services/badge.service";
 
 export const reportsRouter = Router();
 reportsRouter.use(authenticate);
-
-function startOfDay(d: Date) {
-  const copy = new Date(d);
-  copy.setHours(0, 0, 0, 0);
-  return copy;
-}
-
-// "YYYY-MM-DD" in the SERVER's local calendar day, not UTC. Using toISOString() here
-// would key "today" by the UTC date, which can differ from the local date used to
-// build the bucket boundaries (e.g. server in UTC-5 just after UTC midnight) — a sale
-// made moments ago would silently be dropped from every bucket. Bucket generation and
-// sale classification must use the same notion of "day", so both go through this.
-function localDateKey(d: Date): string {
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-async function dailySales(storeId: string, days: number) {
-  const since = startOfDay(new Date());
-  since.setDate(since.getDate() - (days - 1));
-  const sales = await prisma.sale.findMany({
-    where: { storeId, saleDate: { gte: since } },
-    select: { saleDate: true, salePrice: true },
-  });
-  const buckets = new Map<string, { transactions: number; grossSales: number }>();
-  for (let i = 0; i < days; i++) {
-    const d = new Date(since);
-    d.setDate(d.getDate() + i);
-    buckets.set(localDateKey(d), { transactions: 0, grossSales: 0 });
-  }
-  for (const sale of sales) {
-    const key = localDateKey(sale.saleDate);
-    const bucket = buckets.get(key);
-    if (bucket) {
-      bucket.transactions += 1;
-      bucket.grossSales += sale.salePrice;
-    }
-  }
-  return Array.from(buckets.entries())
-    .map(([date, v]) => ({ date, ...v }))
-    .reverse();
-}
 
 // Dashboard widgets — role-specific per app_flow_document.md (Owner sees payouts/
 // heartbeat, Manager sees low stock/pending intake, Employee sees quick links only).
@@ -64,7 +31,7 @@ reportsRouter.get(
     const [totalInventory, todaySales, pendingIntake, accounts, heartbeat] = await Promise.all([
       prisma.item.count({ where: { storeId, status: "AVAILABLE" } }),
       prisma.sale.aggregate({
-        where: { storeId, saleDate: { gte: startOfDay(new Date()) } },
+        where: { storeId, saleDate: { gte: startOfLocalDay(new Date()) } },
         _sum: { salePrice: true },
         _count: true,
       }),
@@ -100,70 +67,132 @@ reportsRouter.get(
   }
 );
 
-reportsRouter.get(
-  "/daily-sales",
-  requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER"),
-  async (req, res) => {
-    const days = Math.min(90, Math.max(1, Number(req.query.days) || 14));
-    res.json(await dailySales(req.session!.storeId, days));
-  }
-);
+const REPORT_ROLES = ["SYSTEM_ADMIN", "OWNER", "MANAGER"] as const;
+const LEDGER_DAYS = [7, 14, 30, 60, 90];
 
-reportsRouter.get(
-  "/daily-sales/export.csv",
-  requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER"),
-  async (req, res) => {
-    const days = Math.min(90, Math.max(1, Number(req.query.days) || 14));
-    const rows = await dailySales(req.session!.storeId, days);
-    const csv = ["date,transactions,gross_sales", ...rows.map((r) => `${r.date},${r.transactions},${r.grossSales.toFixed(2)}`)].join("\n");
-    res.setHeader("Content-Type", "text/csv");
-    res.setHeader("Content-Disposition", "attachment; filename=daily-sales.csv");
-    res.send(csv);
-  }
-);
+// ?date=YYYY-MM-DD (server-local day; default today) and ?days= (ledger length).
+function summaryParams(query: Record<string, unknown>) {
+  const asOf = parseLocalDate(query.date) ?? startOfLocalDay(new Date());
+  const requested = Number(query.days) || 14;
+  const days = LEDGER_DAYS.includes(requested) ? requested : 14;
+  return { asOf, days };
+}
 
-// Inventory Aging — bucketed by days since intake, AVAILABLE items only.
-reportsRouter.get(
-  "/inventory-aging",
-  requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER"),
-  async (req, res) => {
-    const items = await prisma.item.findMany({
-      where: { storeId: req.session!.storeId, status: "AVAILABLE" },
-      select: { id: true, sku: true, description: true, intakeDate: true, price: true },
-    });
-    const now = Date.now();
-    const buckets = { "0-30": 0, "31-60": 0, "61-90": 0, "90+": 0 } as Record<string, number>;
-    const aged90Plus: typeof items = [];
-    for (const item of items) {
-      const days = Math.floor((now - item.intakeDate.getTime()) / (1000 * 60 * 60 * 24));
-      if (days <= 30) buckets["0-30"]++;
-      else if (days <= 60) buckets["31-60"]++;
-      else if (days <= 90) buckets["61-90"]++;
-      else {
-        buckets["90+"]++;
-        aged90Plus.push(item);
-      }
-    }
-    res.json({ buckets, aged90Plus });
-  }
-);
+// Daily Sales Summary: the day / week-to-date / year-to-date comparables (each vs last
+// year) plus a per-day ledger with each day's YoY comparable. See salesReport.service.ts.
+reportsRouter.get("/sales-summary", requireRole(...REPORT_ROLES), async (req, res) => {
+  const { asOf, days } = summaryParams(req.query);
+  const storeId = req.session!.storeId;
+  const [periods, ledger] = await Promise.all([salesPeriods(storeId, asOf), salesLedger(storeId, asOf, days)]);
+  res.json({ asOf: localDateKey(asOf), days, periods, ledger });
+});
 
-// Consignor payout statements — every balance-bearing account with a nonzero balance.
-reportsRouter.get(
-  "/payouts",
-  requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER"),
-  async (req, res) => {
-    const accounts = await prisma.account.findMany({
-      where: {
-        storeId: req.session!.storeId,
-        ...BALANCE_BEARING_WHERE,
-        isActive: true, // dormant accounts aren't listed as owed — see /dashboard
+reportsRouter.get("/sales-summary/export.csv", requireRole(...REPORT_ROLES), async (req, res) => {
+  const { asOf, days } = summaryParams(req.query);
+  const rows = await salesLedger(req.session!.storeId, asOf, days);
+  const cols = ["transactions", "itemsSold", "grossSales", "inventoryAdded", "itemsAdded", "payouts", "payoutCount"] as const;
+  const money = new Set(["grossSales", "inventoryAdded", "payouts"]);
+  const fmt = (k: string, v: number) => (money.has(k) ? v.toFixed(2) : String(v));
+  const snake = (k: string) => k.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+  const header = ["date", ...cols.map(snake), "ly_date", ...cols.map((c) => `ly_${snake(c)}`)].join(",");
+  const lines = rows.map((r) =>
+    [r.date, ...cols.map((c) => fmt(c, r.current[c])), r.lastYearDate, ...cols.map((c) => fmt(c, r.lastYear[c]))].join(",")
+  );
+  res.setHeader("Content-Type", "text/csv");
+  res.setHeader("Content-Disposition", `attachment; filename=daily-sales-${localDateKey(asOf)}.csv`);
+  res.send([header, ...lines].join("\n"));
+});
+
+// Day Detail: everything sold, taken in, repriced, tag-printed and paid out on one day.
+reportsRouter.get("/day-detail", requireRole(...REPORT_ROLES), async (req, res) => {
+  const day = parseLocalDate(req.query.date) ?? startOfLocalDay(new Date());
+  res.json(await dayDetail(req.session!.storeId, day));
+});
+
+// ---- Print Queues (every tag print run — see services/printJobs.service.ts) ----
+const printJobListSchema = z.object({
+  from: z.string().optional(),
+  to: z.string().optional(),
+  q: z.string().trim().optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(25),
+});
+
+reportsRouter.get("/print-jobs", requireRole(...REPORT_ROLES), async (req, res) => {
+  const parsed = printJobListSchema.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const { q, page, pageSize } = parsed.data;
+  const from = parseLocalDate(parsed.data.from);
+  const to = parseLocalDate(parsed.data.to);
+  const where: Prisma.PrintJobWhereInput = {
+    storeId: req.session!.storeId,
+    ...(from || to ? { createdAt: { ...(from ? { gte: from } : {}), ...(to ? { lt: addDays(to, 1) } : {}) } } : {}),
+    ...(q ? { items: { some: { OR: [{ sku: { contains: q } }, { description: { contains: q } }] } } } : {}),
+  };
+  const [rows, total] = await Promise.all([
+    prisma.printJob.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      select: {
+        id: true,
+        createdAt: true,
+        source: true,
+        itemCount: true,
+        activeRole: true,
+        reprintOfId: true,
+        createdBy: { select: { name: true } },
+        items: { orderBy: { position: "asc" }, take: 3, select: { sku: true, description: true } },
       },
-      orderBy: { currentBalance: "desc" },
-    });
-    res.json(accounts);
-  }
-);
+    }),
+    prisma.printJob.count({ where }),
+  ]);
+  res.json({ rows, total, page, pageSize });
+});
+
+reportsRouter.get("/print-jobs/:id", requireRole(...REPORT_ROLES), async (req, res) => {
+  const job = await prisma.printJob.findFirst({
+    where: { id: req.params.id, storeId: req.session!.storeId },
+    include: {
+      createdBy: { select: { name: true } },
+      reprintOf: { select: { id: true, createdAt: true } },
+      reprints: { orderBy: { createdAt: "asc" }, select: { id: true, createdAt: true, itemCount: true } },
+      items: {
+        orderBy: { position: "asc" },
+        // Current item state alongside the snapshot, so the page can flag tags whose
+        // price/description changed since they were printed.
+        include: { item: { select: { id: true, sku: true, description: true, price: true, status: true, category: true, size: true } } },
+      },
+    },
+  });
+  if (!job) return res.status(404).json({ error: "Print job not found" });
+  res.json(job);
+});
+
+const reprintSchema = z.object({ printJobItemIds: z.array(z.string()).min(1).optional() });
+
+// Reprints a past job (all of it, or the chosen lines) as a new job with the items'
+// CURRENT data — a repriced item gets its new price on the new tag. Lines whose item
+// has since been deleted are skipped.
+reportsRouter.post("/print-jobs/:id/reprint", requireRole(...REPORT_ROLES), async (req, res) => {
+  const parsed = reprintSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const session = req.session!;
+  const job = await prisma.printJob.findFirst({
+    where: { id: req.params.id, storeId: session.storeId },
+    include: { items: { orderBy: { position: "asc" } } },
+  });
+  if (!job) return res.status(404).json({ error: "Print job not found" });
+  const wanted = parsed.data.printJobItemIds ? new Set(parsed.data.printJobItemIds) : null;
+  const lines = job.items.filter((l) => !wanted || wanted.has(l.id));
+  const itemIds = lines.flatMap((l) => (l.itemId ? [l.itemId] : []));
+  if (itemIds.length === 0) return res.status(400).json({ error: "None of these tags' items exist anymore" });
+  const items = await loadPrintableItems(session, itemIds);
+  if (!items) return res.status(400).json({ error: "Some of these items are no longer in this store" });
+  const { job: reprint } = await printItemsAsJob(session, items, "REPRINT", job.id);
+  res.status(201).json({ printJobId: reprint.id, printed: items.length, skipped: lines.length - itemIds.length });
+});
 
 // ---- Employee Sign-In Sheet (scan-to-login badges) ----
 // Lists staff with a badge-eligible role; issuing returns plaintext codes exactly

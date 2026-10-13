@@ -10,7 +10,8 @@
     "add-users": "tsx scripts/add-users.ts",
     "validate": "tsx scripts/validate.ts",
     "create-test-login": "tsx scripts/create-test-login.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "backfill-transactions": "tsx scripts/backfill-transactions.ts"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

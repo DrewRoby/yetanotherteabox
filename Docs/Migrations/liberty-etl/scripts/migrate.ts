@@ -257,6 +257,7 @@ async function main() {
       salePrice: t.salePrice,
       saleDate: t.saleDate,
       paymentType: t.paymentType,
+      transactionId: t.transactionId,
       storeId,
     });
     const forItem = salesByLibertyItemId.get(detail.ITEM_ID) ?? [];

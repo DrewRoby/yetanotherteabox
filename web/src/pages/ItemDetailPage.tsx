@@ -98,7 +98,7 @@ export function ItemDetailPage() {
 
   const reprint = () =>
     run(async () => {
-      await api.post("/items/print-batch", { itemIds: [item.id] });
+      await api.post("/items/print-batch", { itemIds: [item.id], source: "ITEM" });
       setNotice(`Tag for ${item.sku} sent to the printer.`);
     });
 

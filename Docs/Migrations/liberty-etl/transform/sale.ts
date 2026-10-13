@@ -6,6 +6,7 @@ export interface TransformedSale {
   salePrice: number;
   saleDate: Date;
   paymentType: string;
+  transactionId: string; // "lib-<SALE_HDR.SALE_ID>" — one per Liberty ticket
 }
 
 export function transformSaleDetail(
@@ -18,5 +19,6 @@ export function transformSaleDetail(
     salePrice: detail.PRICE_SOLD,
     saleDate: detail.SALE_TS,
     paymentType: paymentTypeId != null ? mapPaymentType(paymentTypeId) : "CASH",
+    transactionId: `lib-${detail.SALE_ID}`,
   };
 }

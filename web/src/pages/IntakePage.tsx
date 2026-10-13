@@ -4,6 +4,7 @@ import { api, ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { Button, Card } from "../components/Card";
 import { Barcode } from "../components/Barcode";
+import { TagLabel } from "../components/TagLabel";
 import { AccountPicker, type AccountOption } from "../components/AccountPicker";
 
 interface CvSuggestion {
@@ -120,7 +121,7 @@ export function IntakePage() {
     setPrintError(null);
     setPrinting(true);
     try {
-      await api.post("/items/print-batch", { itemIds: batch.map((t) => t.itemId) });
+      await api.post("/items/print-batch", { itemIds: batch.map((t) => t.itemId), source: "INTAKE" });
       setPrintedCount(batch.length);
       setBatch([]);
     } catch (err) {
@@ -288,20 +289,18 @@ export function IntakePage() {
 }
 
 function TagPreview({ ticket, onRemove }: { ticket: QueuedTicket; onRemove: () => void }) {
-  const pertinent = [ticket.category, ticket.size ? `Size ${ticket.size}` : null].filter(Boolean).join(" · ");
   return (
-    <div className="relative w-48 border-2 border-ink bg-white p-3 flex flex-col gap-1">
-      <button
-        onClick={onRemove}
-        title="Remove from batch (won't delete the item)"
-        className="absolute top-1 right-1 text-gray-400 hover:text-crimson text-xs leading-none"
-      >
-        ✕
-      </button>
-      <div className="text-[11px] font-bold uppercase leading-tight pr-3 line-clamp-2">{ticket.description}</div>
-      {pertinent && <div className="text-[10px] text-gray-500 uppercase">{pertinent}</div>}
-      <div className="text-lg font-black text-crimson">${ticket.price.toFixed(2)}</div>
-      <Barcode value={ticket.sku} className="w-full" />
-    </div>
+    <TagLabel
+      tag={ticket}
+      corner={
+        <button
+          onClick={onRemove}
+          title="Remove from batch (won't delete the item)"
+          className="text-gray-400 hover:text-crimson text-xs leading-none"
+        >
+          ✕
+        </button>
+      }
+    />
   );
 }

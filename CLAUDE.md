@@ -62,6 +62,13 @@ Treasures cutover. Details live in `server/CLAUDE.md` / `web/CLAUDE.md`:
   onward), configured in Settings > Store, the setup wizard / `config.env`, or the
   migration's `store.yaml`.
 - **Intake**: type-to-search account picker (`web/src/components/AccountPicker.tsx`).
+- **Reports** (2026-10-12): Daily Sales Summary with day / week-to-date / YTD
+  comparables vs last year, plus inventory added and payouts by value; Day Detail
+  (everything sold, added, repriced, tag-printed and paid out on a day); Print Queues
+  (every tag print run is recorded as a `PrintJob` and can be reprinted).
+  `Sale.transactionId` groups checkout lines into tickets (backfilled from Liberty's
+  `SALE_HDR`, whose "receipts" are the owner's nightly posting batches). Inventory
+  Aging and Consignor Payout Statements were removed.
 
 ## The one rule that shapes everything
 

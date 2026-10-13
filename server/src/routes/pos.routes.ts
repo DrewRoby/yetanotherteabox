@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
@@ -70,6 +71,10 @@ posRouter.post("/checkout", async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const session = req.session!;
 
+  // One checkout = one transaction (ticket): every line shares its id and timestamp, so
+  // reports count tickets, not lines (Sale.transactionId — see schema.prisma).
+  const transactionId = randomUUID();
+  const saleDate = new Date();
   const sales = [];
   for (const line of parsed.data.items) {
     const item = await prisma.item.findFirst({
@@ -88,6 +93,8 @@ posRouter.post("/checkout", async (req, res) => {
         registerName: parsed.data.registerName,
         processedById: session.sub,
         storeId: session.storeId,
+        transactionId,
+        saleDate,
       },
     });
 

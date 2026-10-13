@@ -179,6 +179,21 @@ target DB already has a `Store` row, to avoid silently duplicating data. Delete 
 file and re-apply `prisma migrate deploy` (scratch) or re-copy `template.db` (real
 runtime path) to start over.
 
+**Sale tickets on an already-loaded database.** `migrate` now sets
+`Sale.transactionId = "lib-<SALE_ID>"`. A database loaded before that column existed
+(`reporting_suite` migration, 2026-10-12) gets it in place, without re-migrating:
+
+```
+TEABOX_DATABASE_URL="file:<target db path>" npm run backfill-transactions -- --dry-run   # report matches only
+TEABOX_DATABASE_URL="file:<target db path>" npm run backfill-transactions
+```
+
+It matches each migrated sale to its `SALE_DETAIL` by item (`itemNumber` = `ITEM_ID`)
+and timestamp, and only touches `LIB-` sales whose `transactionId` is still null, so
+it's safe to re-run. Against the 2026-10-12 live copy: all 855,340 sales matched, into
+28,771 tickets. It takes about 3 minutes. Back up the file first, and stop
+`teabox.exe` while it runs.
+
 To see the result in the actual running app: install/launch the binary normally
 (`../../../install.sh`, or `~/.local/bin/teabox` if already installed) and log in with
 whichever email/temp-password pairs `migrate` printed at the end of its run. For a

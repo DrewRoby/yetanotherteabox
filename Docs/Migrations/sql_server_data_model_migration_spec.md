@@ -1,4 +1,4 @@
-<!-- migration-spec-freshness: schema.prisma=9c0c17cc enums.ts=770b0724 -->
+<!-- migration-spec-freshness: schema.prisma=d512b497 enums.ts=770b0724 -->
 # Teabox ERP — Data Model Migration Spec (SQL Server source)
 
 Status: **living document**. Update this file whenever the Prisma schema
@@ -518,6 +518,7 @@ required for correctness — nothing else reads `ItemHistory` for business logic
 | `registerName` | `String?` | optional | Cosmetic, e.g. which till/terminal processed it. |
 | `processedById` | `String?` | FK → `User`, nullable | `null` acceptable if the original cashier can't be reliably mapped to a migrated `User`. |
 | `storeId` | `String` | required | |
+| `transactionId` | `String?` | | The ticket (one checkout): every `Sale` from the same source receipt shares one value. Reports count `COUNT(DISTINCT COALESCE(transactionId, id))` as Transactions, so leaving it null makes each line its own transaction. Liberty: `"lib-" + SALE_DETAIL.SALE_ID` (the `SALE_HDR` row). Live POS checkout stamps a UUID per checkout. `liberty-etl`'s `npm run backfill-transactions` sets it in place on a database loaded before the column existed. **Hidden Treasures caveat:** the owner posts the day's paper tickets into Liberty in batches each night, so a Liberty "receipt" is a posting batch (≈5–13 per day, ~30 lines each) and `SALE_TS` is posting time, not sale time. Dates are right; transaction counts and time-of-day aren't checkout-level. |
 
 **One `Sale` credits its item's owning account by `splitPercent`% of `salePrice`
 at the moment of sale** (`pos.routes.ts:112-119`) — that credit is *not* re-derivable
@@ -602,6 +603,13 @@ but worth backfilling a synthetic `"MIGRATION_IMPORT"` action per major entity b
 (e.g. one `AuditLog` row per migrated `Item`, or one summary row per batch — team's
 call) so there's a permanent record inside Teabox itself of when/how historical data
 arrived, distinguishable from organically-created records.
+
+### 4.12 `PrintJob` / `PrintJobItem`
+
+Teabox's own record of tag print runs (Reports > Print Queues): one `PrintJob` per print
+run, one `PrintJobItem` per tag with a snapshot of what was printed. **Don't migrate
+anything into these** — no source system's print history maps onto them, and the app
+creates them itself.
 
 ## 5. Cross-entity invariants to validate post-load
 
