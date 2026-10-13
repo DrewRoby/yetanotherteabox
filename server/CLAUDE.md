@@ -30,10 +30,11 @@ no shared package).
 
 - `User` — auth identity only (email/passwordHash/name, plus `badgeCodeHash`/`badgeIssuedAt` for sign-in-sheet badges — see "Sign-in-sheet badges" below). Never carries roles directly.
 - `UserRole` — `(userId, role, storeId, accountId?)`. One row per role a person holds; a user with both `MANAGER` and `CONSIGNOR` rows still only acts as one per session. `accountId` set for account-scoped roles (Consignor/Vendor/Donor/Booth Owner) — links the grant to the `Account` it acts on.
-- `Store` — one per shop.
-- `Account` — polymorphic party items/payouts attach to: `accountType ∈ {CONSIGNOR, VENDOR, DONOR, BOOTH_OWNER, STORE}`. Every store has exactly one `STORE`-type account (store-owned inventory) so intake always has a target. `isStoreAccount` flags *additional* store-owned accounts (a shop's per-year "2019 Inventory" buckets, kept separate for their history) under an ordinary `CONSIGNOR`/`VENDOR`/`BOOTH_OWNER` type. **`isBalanceBearing()` (`src/services/accounts.service.ts`) is the one rule for "is this account owed money"** — balance-bearing type *and* not flagged; checkout credits, payouts, `serializeAccount()`'s balance stripping (Donor/Store/flagged — removed from the API response, not just hidden in the UI) and the payout reports (`BALANCE_BEARING_WHERE`) all use it. Don't test `BALANCE_BEARING_ACCOUNT_TYPES` alone. `mailingAddress` (free text, like `Store.location`) and `paymentMethod` have **no current write path** — populated only by direct SQL (e.g. a migration), not reachable via any route or UI today.
-- `Item` — `accountId` is **required** (no intake without an account). `status ∈ {PENDING, AVAILABLE, SOLD, DONATED, DISPOSED, RETURNED}`. `cost` (acquisition cost basis) has **no current write path**, same as `consignmentType`. `sku` is also the barcode value (see below) — POS scan lookup, the printed tag, and the web `Barcode` component all key off it. `itemNumber` is a sequential-per-store counter (`@@unique([storeId, itemNumber])`) that `sku` is derived from.
-- `ItemHistory`, `Photo`, `Sale`, `Payout`, `Device`, `Heartbeat` — as named.
+- `Store` — one per shop. `itemPrefix`/`itemStartNumber` drive new item tags (see "Barcode values").
+- `Account` — polymorphic party items/payouts attach to: `accountType ∈ {CONSIGNOR, VENDOR, DONOR, BOOTH_OWNER, STORE}`. Every store has exactly one `STORE`-type account (store-owned inventory) so intake always has a target. `isStoreAccount` flags *additional* store-owned accounts (a shop's per-year "2019 Inventory" buckets, kept separate for their history) under an ordinary `CONSIGNOR`/`VENDOR`/`BOOTH_OWNER` type. **`isBalanceBearing()` (`src/services/accounts.service.ts`) is the one rule for "is this account owed money"** — balance-bearing type *and* not flagged; checkout credits, payouts, `serializeAccount()`'s balance stripping (Donor/Store/flagged — removed from the API response, not just hidden in the UI) and the payout reports (`BALANCE_BEARING_WHERE`) all use it. Don't test `BALANCE_BEARING_ACCOUNT_TYPES` alone. `isActive` = dormant flag (see "Active flag" under Accounts). `lastSaleAt` is denormalized (see Accounts). `mailingAddress` (free text, like `Store.location`) and `paymentMethod` have **no current write path** — populated only by direct SQL (e.g. a migration), not reachable via any route or UI today.
+- `Item` — `accountId` is **required** (no intake without an account). `status ∈ {PENDING, AVAILABLE, SOLD, DONATED, DISPOSED, RETURNED}`. `cost` (acquisition cost basis) has **no current write path**, same as `consignmentType`. `sku` is also the barcode value (see below) — POS scan lookup, the printed tag, and the web `Barcode` component all key off it. `itemNumber` (`@@unique([storeId, itemNumber])`) is the number encoded in `sku` — see "Barcode values" for the invariant. `soldAt`/`paidOutAt` are denormalized latest sale/payout dates for list sorting (see "Item lists").
+- `ItemHistory`, `Photo`, `Sale`, `Device`, `Heartbeat` — as named.
+- `Payout` — `payoutNumber` is the human-facing "Payout #" (migrated payouts keep the source system's number; new ones `nextPayoutNumber()`).
 - `PayoutLine` — itemization of a `Payout`; a `Sale` with a line counts as paid out. See "Accounts" below.
 - `AuditLog` — records `activeRole` alongside `performedById`, not just the user (security-doc requirement: interpret actions strictly in the role that performed them).
 
@@ -273,8 +274,10 @@ limits up front.
 
 `GET /lookup?code=` exact SKU match. `GET /inventory-search?q=&category=&size=&brand=`
 fuzzy search over `AVAILABLE` items only (the "tagless item" modal). `POST /checkout`
-creates one `Sale` per cart line, flips items to `SOLD`, credits the owning account's
-balance by its `splitPercent` — skipped for `DONOR`/`STORE` accounts (no payouts owed).
+creates one `Sale` per cart line, flips items to `SOLD` (stamping `Item.soldAt`), stamps
+`Account.lastSaleAt`, and credits the owning account's balance by `consignorShareOf()` —
+only when `isBalanceBearing()` (so not Donor/Store/store-flagged accounts). Inactive
+accounts are still credited: money owed is real even on a dormant account.
 
 ## Reports (`src/routes/reports.routes.ts`)
 

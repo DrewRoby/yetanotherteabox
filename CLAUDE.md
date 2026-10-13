@@ -20,7 +20,8 @@ hardware/cloud) — none of that is built; see "Deliberately not built" below.
 | `install.bat`, `dist-bin/teabox.exe`, `config.env.example` | Windows x64 build for on-site test deploys (portable: exe/config/db stay together, no XDG dir). Built with `cd server && npm run build:windows` — works cross-built from Linux or run natively on Windows under Git Bash. See README's "Windows test-deploy build" and `Docs/windows-test-deploy-setup.md` for first-run/reset/config-driven-setup details. |
 | `wireframes/` | Reference mockups (Ming Dynasty theme: crimson `#b91c1c`, gold `#d4af37`, ink `#1a1a1a`, bone `#f8f3e7`). |
 | `*_document.md`, `tasks.json` | Original spec. Consult before adding features not yet built (e.g. marketplace) to check intended shape. |
-| `Docs/Migrations/` | Living specs for migrating another shop's data into Teabox — `sql_server_data_model_migration_spec.md` (first source: Liberty by ResaleWorld) plus `liberty-etl/` (the actual profiling/transform/load tool, not shipped product code). Update the spec alongside `schema.prisma`/`enums.ts` changes that affect what a migration must produce, then run `cd server && npm run check:migration-spec -- --write` to re-stamp it (plain `npm run check:migration-spec` fails if the spec is stale relative to those two files). |
+| `Docs/Migrations/` | Living specs for migrating another shop's data into Teabox — `sql_server_data_model_migration_spec.md` (first source: Liberty by ResaleWorld) plus `liberty-etl/` (the actual profiling/transform/load tool, not shipped product code). Update the spec alongside `schema.prisma`/`enums.ts` changes that affect what a migration must produce, then run `cd server && npm run check:migration-spec -- --write` to re-stamp it (plain `npm run check:migration-spec` fails if the spec is stale relative to those two files). `liberty-etl/README.md` covers running it on Windows against a native SQL Server Express restore. **`dist-bin/teabox.db` is the live Hidden Treasures database (real data entered in the app since 2026-10-11)** — upgrade it in place (`prisma migrate deploy`, backup into `dist-bin/arch/` first), never by re-running the migration, unless the user explicitly asks for a reset. |
+| `.claude/launch.json` | Dev servers for the preview tools: `server`/`web` (:4000/:5173) and `server-alt`/`web-alt` (:4001/:5174 — `web`'s Vite proxy honors `API_PROXY_TARGET`), so a dev stack can run beside a `teabox.exe` holding :4000. Point `server-alt` at a scratch DB with `DATABASE_URL` for real-data testing; never at `dist-bin/teabox.db`. |
 | `Docs/windows-test-deploy-setup.md` | Walkthrough for the Windows package: building it, where `teabox.db` actually lives, resetting to a true first run, driving setup from `config.env` instead of the wizard, and hand-generating a fresh database with `prisma migrate deploy` — including two Prisma+SQLite+Windows path gotchas found while writing it (see this file's own gotchas list below). |
 
 ## Two ways to boot the app
@@ -39,6 +40,28 @@ environment (e.g. via `config.env` on the Windows build), `maybeAutoCompleteSetu
 (`server/src/services/setup.service.ts`) creates the store + Owner from those values
 on startup, before the server accepts its first request. Only fires against a fresh
 (zero-store) database; inert afterward. See `Docs/windows-test-deploy-setup.md`.
+
+## Built beyond the original punch list (2026-10-10 → 10-12)
+
+`tasks.json` scoped the first build; the app has since grown, driven by the Hidden
+Treasures cutover. Details live in `server/CLAUDE.md` / `web/CLAUDE.md`:
+
+- **Accounts**: client-side search/sort/paging over the whole tab; Last Sale / Last
+  Payout / Last Activity columns; account page with paged payout history and a
+  server-side filtered/sorted/paged item table; payout detail itemized from
+  `PayoutLine` (imported from Liberty's `CLIENT_TRANS.PAYOUT_ID`); readable
+  `Payout.payoutNumber`.
+- **Account flags**: `isStoreAccount` (extra store-owned accounts — Liberty's type-3
+  "Store Account" clients) and `isActive` (dormant accounts — hidden, excluded from
+  payout-obligation totals, no new intake), each togglable on the account page, plus a
+  bulk select mode on the list (`POST /accounts/bulk-status`).
+- **Inventory**: whole-store browse (`GET /items/browse`) with category/status
+  dropdowns, date ranges and sortable intake/sale/payout dates; item detail can edit,
+  delete (only without sale/payout records) and reprint.
+- **Item tags**: `<Store.itemPrefix>-<itemNumber>` (Hidden Treasures: `HT-2000000`
+  onward), configured in Settings > Store, the setup wizard / `config.env`, or the
+  migration's `store.yaml`.
+- **Intake**: type-to-search account picker (`web/src/components/AccountPicker.tsx`).
 
 ## The one rule that shapes everything
 
@@ -67,6 +90,29 @@ token shape and the intake/POS/account rules that follow from it.
 - **Never pass a Git-Bash-style path (`/c/Users/...`) as an absolute Prisma `DATABASE_URL`**, e.g. when running `prisma migrate deploy` by hand from Git Bash. Prisma's Windows engine is a native binary with no notion of MSYS path translation — it reads the leading `/` as "root of the current drive" and silently creates a literal `C:\c\Users\...` tree instead of erroring. Use a relative filename (resolved relative to `schema.prisma`'s directory, not your shell's cwd) or a real `C:/...` drive-letter path. See `Docs/windows-test-deploy-setup.md` for the full writeup.
 - **Don't build a server-side "scanner adapter" for a physical USB barcode scanner.** Unlike a real printer or a CV service, a desktop USB barcode scanner (tested against the NetumScan NSA5) is HID keyboard-emulation hardware — no driver, no serial protocol, nothing to stub. It just types the decoded code + a terminator (Enter, by default) into whatever has focus. The entire "integration" is a plain `<input>` plus disciplined focus management (see `web/CLAUDE.md`'s "Barcode scanning" section) — resist the urge to model it after `adapters/printer.ts`.
 - **Item intake no longer prints a tag as a side effect of `POST /items`.** Printing was pulled out into an explicit batch step — `IntakePage` queues each saved item and calls `POST /items/print-batch` once a clerk is ready — so entering several items from one drop-off only means one trip to the printer, not one per item. See `server/CLAUDE.md`'s "Ticket printing" section and `web/CLAUDE.md`'s "Ticket printing" section before wiring printing back into the intake handler.
+
+- **Signed-in but every list is empty → stale session, not missing data.** A packaged
+  install with a fixed `JWT_SECRET` (e.g. `config.env`) keeps accepting tokens across a
+  database rebuild/re-migration, but the token's `storeId`/user ids point at the old
+  database, so every store-scoped query returns nothing. Sign out and back in. (Open
+  item: `authenticate`/`/auth/me` don't check the store/user still exist — making
+  them 401 would force a re-login automatically.)
+- **Denormalized columns must be kept in step by anything that bypasses the app.**
+  `Account.lastSaleAt`, `Item.soldAt`, `Item.paidOutAt` exist because computing them
+  live over ~900k items / ~850k sales took 7–40s. POS checkout and
+  `generatePaidPayout()` stamp them; seed scripts and migrations must run the backfill
+  `UPDATE`s from the schema migrations that added them. Don't "simplify" them back into
+  live aggregates.
+- **Every SKU encodes its own `itemNumber`** (`LIB-1162674` ↔ 1162674; `HT-2000000` ↔
+  2000000). New items take one past the store's highest `itemNumber` (floor
+  `Store.itemStartNumber`), which is collision-free only because of that invariant —
+  keep it in any path that creates items.
+- **Large-table queries (SQLite, ~900k items)**: page server-side; avoid
+  `ORDER BY … NULLS LAST` (it stops SQLite using the index — page dated/undated rows as
+  two segments instead, see `itemList.service.ts`); scope relation filters before
+  joining (`lines: { some: { item: … } }` on `Payout` scanned every `PayoutLine` in
+  the store); check `EXPLAIN QUERY PLAN` against a copy of the real database, not the
+  seed — the seed has ~20 items and hides all of this.
 
 ## Roadmap toward a real (small) commercial deployment
 

@@ -104,6 +104,6 @@ intake route, just weren't exposed in this form before.
 
 ## API client (`src/api/client.ts`)
 
-Thin wrapper (`api.get/post/put/del`) auto-attaching the bearer token and throwing
+Thin wrapper (`api.get/post/put/patch/del`) auto-attaching the bearer token and throwing
 `ApiError` with the parsed server error on non-2xx. CSV export bypasses it
 deliberately (needs a `Blob`, not JSON).

@@ -18,11 +18,18 @@ sales, 50,552 payouts, and a real `OWNER` login for Sherry Stacey, all validated
 Server Express into the `dist-bin/` Windows package (see "Windows / native SQL Server
 Express" below). `scripts/migrate.ts` had to learn to populate `Item.itemNumber`
 (required since the `20260915011122_add_item_number` schema migration, which postdates
-the first run) — assigned gapless 1..N in intake order, and `npm run validate` now
-checks that. Later the same weekend the migration also gained: `PayoutLine`
-itemization from `CLIENT_TRANS.PAYOUT_ID`, `Account.createdAt` from
-`CLIENT.CREATE_TS`, `Payout.payoutNumber` = Liberty's `PAYOUT_ID`, and (2026-10-11)
-the type-3 accounts below.
+the first run) — now `itemNumber = ITEM_ID`, the number in the `LIB-` SKU (2026-10-11;
+briefly gapless 1..N before that). Later the same weekend the migration also gained:
+`PayoutLine` itemization from `CLIENT_TRANS.PAYOUT_ID`, `Account.createdAt` from
+`CLIENT.CREATE_TS`, `Payout.payoutNumber` = Liberty's `PAYOUT_ID`, store tag numbering
+from `store.yaml` `items:` (HT, from 2,000,000), `Account.isActive` from `INACTIVE_TS`,
+backfilled `Item.soldAt`/`paidOutAt`, and (2026-10-11) the type-3 accounts below.
+
+**Since 2026-10-11 `dist-bin/teabox.db` holds real data entered through the app** (the
+first `HT-` items, account flags set by staff). Schema changes since then were applied
+**in place** (`prisma migrate deploy` + targeted updates, each preceded by a copy into
+`dist-bin/arch/`) — re-running `migrate` into it would now destroy that work. Treat a
+full re-migration as a deliberate, user-approved reset, not a routine step.
 
 - **The `CLIENT_TYPE_ID = 3` ("Store Account") accounts** (~46 rows, at least 3
   different real meanings mixed under one type code) are **migrated as `CONSIGNOR`
