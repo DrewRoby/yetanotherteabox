@@ -16,6 +16,7 @@ import { itemsRouter } from "./routes/items.routes";
 import { posRouter } from "./routes/pos.routes";
 import { reportsRouter } from "./routes/reports.routes";
 import { settingsRouter } from "./routes/settings.routes";
+import { auditRouter } from "./routes/audit.routes";
 
 const app = express();
 
@@ -50,6 +51,7 @@ app.use("/api/items", itemsRouter);
 app.use("/api/pos", posRouter);
 app.use("/api/reports", reportsRouter);
 app.use("/api/settings", settingsRouter);
+app.use("/api/audit", auditRouter);
 
 // The packaged executable and any `npm run build`-then-serve deployment ship the
 // built web client under server/public/ (see scripts/build-linux.sh). In normal dev,

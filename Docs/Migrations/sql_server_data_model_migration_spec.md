@@ -1,4 +1,4 @@
-<!-- migration-spec-freshness: schema.prisma=d512b497 enums.ts=770b0724 -->
+<!-- migration-spec-freshness: schema.prisma=d4584354 enums.ts=3fd31e7e -->
 # Teabox ERP — Data Model Migration Spec (SQL Server source)
 
 Status: **living document**. Update this file whenever the Prisma schema
@@ -170,7 +170,17 @@ instead (see the `ITEM` section), confirming §3's general guidance not to force
   "current balance" field to read directly. §5's reconciliation formula becomes:
   `Account.currentBalance = SUM(CLIENT_TRANS.ACT_TRANS_AMT)` for that `CLIENT_ID`,
   **restricted to rows whose `TRANS_CD.PAYABLE_IND = 1`** (excludes `-1`/pending and
-  `0`/non-cash rows — see the `CLIENT_TRANS`/`TRANS_CD` section below).
+  `0`/non-cash rows — see the `CLIENT_TRANS`/`TRANS_CD` section below) **and whose
+  `PAYOUT_ID IS NULL`**. Liberty has no negative "payout" ledger row: paying out stamps
+  `PAYOUT_ID` on the credit rows the check/cash covered. Without that filter the sum is
+  the client's *lifetime earnings* — the first load did exactly this ($1.53M "owed" vs
+  ~$36k real; fixed in place 2026-10-12 by `liberty-etl`'s `npm run repair-ledger`,
+  **pending confirmation against Liberty's own screens** — root `CLAUDE.md` TODO).
+  Cross-check that holds: payable rows *with* a `PAYOUT_ID` (~$1.65M) ≈ total of all
+  `P` + `N` payouts.
+- `Account.legacyId = "liberty:" + CLIENT_ID` — keeps the link back to the source ledger
+  (the first load didn't; `repair-ledger` rebuilt it from item ownership and payout
+  numbers).
 - `CREATE_TS` → `Account.createdAt` (the Accounts list's "Created" column — without it,
   every migrated account shows the migration date). 1 `NULL` (`CLIENT_ID 3`) falls back
   to `ACTIVE_TS`, then `LAST_UPDATE_TS`. **Caveat**: 1,364 of 3,608 migrated clients
@@ -232,6 +242,18 @@ open questions at the end of this document.
   that consignor's `Account`); an item **absent** from `CLIENT_ITEM` (339,842 of
   771,073, ~44%) is store-owned stock → `Item.accountId` resolves to the `STORE`
   account.
+- **Columns the first load skipped, now carried** (`fetchItems`, `transformItem`;
+  backfilled in place by `repair-ledger`): `PRICE_CODE.STORE_PCT` per item →
+  `Item.consignorPercent = 100 − STORE_PCT` (the split is per item in Liberty — e.g.
+  "100% TO STORE" items on consignor accounts credit nothing; Teabox's checkout and
+  payouts now honor it); `DONATE_IND` → `Item.donateIfUnsold` (set on ~89% of items — a
+  client default, so it records the agreement rather than distinguishing items);
+  `TAG_PRINTED_TS` → `Item.tagPrintedAt` (unset on ~3.6k available items — a strong "not
+  really on the floor" signal for the Inventory Audit). Checked and **not** worth
+  carrying: `LOCATION_ID`/`SECTION_ID` (only "Default"), `PRICE_CODE.EXPIRE_PD`/
+  `EXPIRE_ACT_ID`/`PICK_PD` (never configured — Liberty enforced no consignment period,
+  which is why decades-old items still read Available), `QTY_ON_HAND` (always 1),
+  `ITEM_UDF_STATUS_ID`/`DISCONTINUED`/`UNUSED_IND` (unused), `CLIENT.INACTIVE_TS` (3 rows).
 - `ITEM.COST` is genuinely populated (real values like `1, 3, 5, 2, 0`, not a
   default-only column) — **confirms this spec's flagged cost-basis gap is real**.
   Added `Item.cost` (nullable `Float`) to `schema.prisma`.
@@ -325,10 +347,14 @@ existing guidance rather than migrating them as transactions.
 ### `PAYOUT` (50,640 rows) → `Payout`
 
 `RECONCILE_STATUS` (a raw char code, no lookup table) breaks down as `P` 45,055 / `N`
-5,119 / `R` 233 / `D` 233. Best-guess crosswalk, **worth confirming with the shop
-owner** rather than assuming: `P` (Paid) → `PAID`, `N` (Not yet reconciled) →
-`REQUESTED`, `R` (Reconciled) → `PAID`, `D` (Deleted/voided) → `REJECTED`.
-`PAYMENT_ACT_ID` → `Account.paymentMethod` per above.
+5,119 / `R` 233 / `D` 233. Crosswalk: `P` (Paid) → `PAID`, `R` (Reconciled) → `PAID`,
+`D` (Deleted/voided) → `REJECTED`, and **`N` (Not yet reconciled) → `PAID`**: at Hidden
+Treasures every `N` payout has `PAYMENT_ACT_ID = 1` (Check) and a check number, every
+`P` is Cash — `N` means a written check never bank-reconciled in Liberty, not an unpaid
+request (the first load mapped it to `REQUESTED`; fixed by `repair-ledger`). Whether any
+of those checks went uncashed isn't in Liberty. `PAYMENT_ACT_ID` → `Payout.method`
+(1 → `CHECK`, 2 → `CASH`) and `CHECK_NUM` → `Payout.checkNumber` (checks only), as
+well as `Account.paymentMethod` per above.
 
 ### `SALE_HDR`/`SALE_DETAIL`/`SALE_PAY_DTL` → `Sale`
 

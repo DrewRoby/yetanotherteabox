@@ -1,5 +1,5 @@
 import type { PayoutLineRow, PayoutRow } from "../extract/liberty";
-import { mapPayoutLineType, mapPayoutStatus } from "./crosswalks";
+import { mapPayoutLineType, mapPayoutMethod, mapPayoutStatus } from "./crosswalks";
 
 export interface TransformedPayout {
   libertyClientId: number;
@@ -7,6 +7,8 @@ export interface TransformedPayout {
   status: string;
   createdAt: Date;
   paidAt: Date | null;
+  method: string | null;
+  checkNumber: string | null;
 }
 
 export function transformPayout(payout: PayoutRow): TransformedPayout {
@@ -18,6 +20,8 @@ export function transformPayout(payout: PayoutRow): TransformedPayout {
     status,
     createdAt,
     paidAt: status === "PAID" ? createdAt : null,
+    method: mapPayoutMethod(payout.PAYMENT_ACT_ID),
+    checkNumber: mapPayoutMethod(payout.PAYMENT_ACT_ID) === "CHECK" ? payout.CHECK_NUM?.trim() || null : null,
   };
 }
 

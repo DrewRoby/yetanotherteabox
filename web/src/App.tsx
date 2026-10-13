@@ -13,6 +13,7 @@ import { AccountsPage } from "./pages/AccountsPage";
 import { ConsignorPortalPage } from "./pages/ConsignorPortalPage";
 import { BoothOwnerPricingPage } from "./pages/BoothOwnerPricingPage";
 import { ReportsPage } from "./pages/ReportsPage";
+import { AuditPage } from "./pages/AuditPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { AccessDeniedPage } from "./pages/AccessDeniedPage";
 
@@ -89,6 +90,16 @@ export function App() {
           <RequireRole roles={["BOOTH_OWNER", "MANAGER", "OWNER"]}>
             <Shell>
               <BoothOwnerPricingPage />
+            </Shell>
+          </RequireRole>
+        }
+      />
+      <Route
+        path="/audit"
+        element={
+          <RequireRole roles={["SYSTEM_ADMIN", "OWNER", "MANAGER"]}>
+            <Shell>
+              <AuditPage />
             </Shell>
           </RequireRole>
         }

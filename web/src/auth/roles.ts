@@ -46,6 +46,7 @@ export const NAV_ENTRIES: NavEntry[] = [
   { path: "/accounts", label: "Accounts", roles: ["SYSTEM_ADMIN", "OWNER", "MANAGER", "EMPLOYEE"] },
   { path: "/portal", label: "My Portal", roles: ["CONSIGNOR", "VENDOR", "DONOR"] },
   { path: "/booth-pricing", label: "Booth Pricing", roles: ["BOOTH_OWNER", "MANAGER", "OWNER"] },
+  { path: "/audit", label: "Inventory Audit", roles: ["SYSTEM_ADMIN", "OWNER", "MANAGER"] },
   { path: "/reports", label: "Reports", roles: ["SYSTEM_ADMIN", "OWNER", "MANAGER"] },
   { path: "/settings", label: "Settings", roles: ["SYSTEM_ADMIN", "OWNER", "MANAGER"] },
 ];

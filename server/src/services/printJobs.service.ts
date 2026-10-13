@@ -25,9 +25,12 @@ export async function printItemsAsJob(
     size: item.size ?? undefined,
   }));
   const results = await printTagBatch(tickets);
+  const printedAt = new Date();
+  await prisma.item.updateMany({ where: { id: { in: items.map((i) => i.id) } }, data: { tagPrintedAt: printedAt } });
   const job = await prisma.printJob.create({
     data: {
       storeId: session.storeId,
+      createdAt: printedAt,
       createdById: session.sub,
       activeRole: session.activeRole,
       source,

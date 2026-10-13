@@ -93,11 +93,18 @@ export async function fetchPaymentActs(): Promise<{ PAYMENT_ACT_ID: number; BANK
 }
 
 // Balance formula per spec §3.1: SUM(ACT_TRANS_AMT) restricted to TRANS_CD.PAYABLE_IND = 1
-// (excludes -1 = pending/pay-delayed, 0 = non-cash e.g. trade/store-credit buckets).
-export async function fetchClientBalances(): Promise<{ CLIENT_ID: number; balance: number }[]> {
+// (excludes -1 = pending/pay-delayed, 0 = non-cash e.g. trade/store-credit buckets) AND
+// to rows not yet settled by a payout (PAYOUT_ID IS NULL). Liberty records a payout by
+// stamping PAYOUT_ID on the ledger rows it covered — there is no negative payout row —
+// so summing every payable row gives lifetime earnings, not the balance owed (the first
+// load did exactly that; fixed in place by scripts/repair-ledger.ts, 2026-10-12).
+// `lifetime` keeps the old all-rows sum, which repair-ledger needs to back it out.
+export async function fetchClientBalances(): Promise<{ CLIENT_ID: number; balance: number; lifetime: number }[]> {
   const pool = await getPool();
   const result = await pool.request().query(`
-    SELECT ct.CLIENT_ID, SUM(ct.ACT_TRANS_AMT) AS balance
+    SELECT ct.CLIENT_ID,
+           SUM(CASE WHEN ct.PAYOUT_ID IS NULL THEN ct.ACT_TRANS_AMT ELSE 0 END) AS balance,
+           SUM(ct.ACT_TRANS_AMT) AS lifetime
     FROM CLIENT_TRANS ct
     JOIN TRANS_CD tc ON ct.TRANS_CD_ID = tc.TRANS_CD_ID
     WHERE tc.PAYABLE_IND = 1
@@ -168,14 +175,18 @@ export interface LibertyItemRow {
   PRICE: number | null;
   COST: number | null;
   SALE_DETAIL_ID: number | null;
+  STORE_PCT: number | null; // via PRICE_CODE — the store's cut; consignor share = 100 - STORE_PCT
+  DONATE_IND: number | null;
+  TAG_PRINTED_TS: Date | null;
 }
 
 export async function fetchItems(): Promise<LibertyItemRow[]> {
   const pool = await getPool();
   const result = await pool.request().query(`
-    SELECT ITEM_ID, ITEM_NUM, CATEGORY_ID, STATUS_ID, ITEM_ACQUISITION_TYPE_ID,
-           ITEM_NAME, ITEM_DESC, RECEIVE_TS, PRICE, COST, SALE_DETAIL_ID
-    FROM ITEM;
+    SELECT i.ITEM_ID, i.ITEM_NUM, i.CATEGORY_ID, i.STATUS_ID, i.ITEM_ACQUISITION_TYPE_ID,
+           i.ITEM_NAME, i.ITEM_DESC, i.RECEIVE_TS, i.PRICE, i.COST, i.SALE_DETAIL_ID,
+           pc.STORE_PCT, i.DONATE_IND, i.TAG_PRINTED_TS
+    FROM ITEM i LEFT JOIN PRICE_CODE pc ON pc.PRICE_CODE_ID = i.PRICE_CODE_ID;
   `);
   return result.recordset;
 }
@@ -232,12 +243,13 @@ export interface PayoutRow {
   PAYOUT_TS: Date | null;
   PAYOUT_AMT: number | null;
   RECONCILE_STATUS: string | null;
+  CHECK_NUM: string | null;
 }
 
 export async function fetchPayouts(): Promise<PayoutRow[]> {
   const pool = await getPool();
   const result = await pool.request().query(`
-    SELECT PAYOUT_ID, CLIENT_ID, PAYMENT_ACT_ID, PAYOUT_TS, PAYOUT_AMT, RECONCILE_STATUS
+    SELECT PAYOUT_ID, CLIENT_ID, PAYMENT_ACT_ID, PAYOUT_TS, PAYOUT_AMT, RECONCILE_STATUS, CHECK_NUM
     FROM PAYOUT
     WHERE CLIENT_ID <> 101508;
   `);

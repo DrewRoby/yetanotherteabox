@@ -69,6 +69,32 @@ Treasures cutover. Details live in `server/CLAUDE.md` / `web/CLAUDE.md`:
   `Sale.transactionId` groups checkout lines into tickets (backfilled from Liberty's
   `SALE_HDR`, whose "receipts" are the owner's nightly posting batches). Inventory
   Aging and Consignor Payout Statements were removed.
+- **Inventory Audit** (`/audit`, 2026-10-12): explorer over every Available/Pending item —
+  faceted pivot (consignment expired?, age, owner, account status, owner's last sale,
+  tag printed, donate flag, split, category, price, label) with retail / consignor
+  share / store share, item table with bulk labeling (Keep, Expired → Store, Donate,
+  Return, Write Off; label first, Owner/Admin applies), and a Payout Obligations view
+  (balances aged by last activity, floor value by owner). Hidden Treasures' policy:
+  consignments expire after **90 days**, then become the store's.
+
+## Open TODO — validate with the shop owner (Sherry)
+
+Migrated consignor balances were **recomputed on 2026-10-12** (`liberty-etl`
+`npm run repair-ledger`, applied to the live DB): the first migration had summed every
+payable `CLIENT_TRANS` row — lifetime earnings, $1.53M — but Liberty settles a payout
+by stamping `PAYOUT_ID` on the rows it covered, so only rows with no `PAYOUT_ID` are
+owed: ~$39.6k positive across ~1,390 accounts (−$3.1k negative across ~120). The same
+repair made Liberty's "N" (never bank-reconciled) payouts — every one a written check —
+`PAID`. This is internally consistent (rows on payouts reconcile to payout totals
+within ~$1k of $1.65M) but **not yet confirmed against Liberty's own screens**. Ask the
+owner to read back from Liberty the balance owed for **one or two consignors she knows
+well**, plus the biggest one (Liberty client 101550, "lost & found lost & found",
+computed at $2,874.39 — itself probably a sticky-note account, not a person), and
+compare with the account page / Inventory Audit > Payout Obligations.
+If they disagree: Liberty's own balance report export becomes the authority (load its
+per-client figures into `currentBalance` directly), or `HOLD_IND`/pending-code rows are
+treated differently. Whether any "N" checks were never cashed can only come from bank
+records.
 
 ## The one rule that shapes everything
 

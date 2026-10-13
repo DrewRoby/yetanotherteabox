@@ -26,6 +26,9 @@ export interface TransformedItem {
   intakeDate: Date;
   price: number;
   cost: number | null;
+  consignorPercent: number | null;
+  donateIfUnsold: boolean | null;
+  tagPrintedAt: Date | null;
   ownerClientId: number | null; // null => store-owned
 }
 
@@ -48,6 +51,9 @@ export function transformItem(item: LibertyItemRow, lookups: ItemLookups): Trans
     intakeDate: item.RECEIVE_TS,
     price: item.PRICE ?? 0,
     cost: item.COST ?? null,
+    consignorPercent: item.STORE_PCT != null ? 100 - item.STORE_PCT : null,
+    donateIfUnsold: item.DONATE_IND != null ? item.DONATE_IND === 1 : null,
+    tagPrintedAt: item.TAG_PRINTED_TS ?? null,
     ownerClientId: lookups.ownerClientIdByItemId.get(item.ITEM_ID) ?? null,
   };
 }

@@ -174,6 +174,7 @@ async function main() {
       paymentMethod: t.paymentMethod,
       splitPercent: t.splitPercent,
       currentBalance: t.currentBalance,
+      legacyId: `liberty:${client.CLIENT_ID}`,
       ...(t.createdAt ? { createdAt: t.createdAt } : {}),
     };
   });
@@ -230,6 +231,9 @@ async function main() {
       status: t.status,
       intakeDate: t.intakeDate,
       price: t.price,
+      consignorPercent: t.consignorPercent,
+      donateIfUnsold: t.donateIfUnsold,
+      tagPrintedAt: t.tagPrintedAt,
       cost: t.cost,
       accountId,
       storeId,
@@ -308,6 +312,8 @@ async function main() {
       status: t.status,
       createdAt: t.createdAt,
       paidAt: t.paidAt,
+      method: t.method,
+      checkNumber: t.checkNumber,
     });
   }
   await createManyChunked((data) => prisma.payout.createMany({ data }), payoutRows, 2000, "payouts");

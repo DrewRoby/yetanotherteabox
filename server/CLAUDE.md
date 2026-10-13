@@ -38,6 +38,7 @@ no shared package).
 - `PayoutLine` — itemization of a `Payout`; a `Sale` with a line counts as paid out. See "Accounts" below.
 - `Sale.transactionId` — the ticket (one checkout); see "POS" and "Reports".
 - `PrintJob` / `PrintJobItem` — every tag print run plus a snapshot of each tag; see "Ticket printing".
+- `Item.consignorPercent` (per-item split, overrides `Account.splitPercent`), `donateIfUnsold`, `tagPrintedAt` and the `audit*` columns; `Account.legacyId` (`"liberty:<CLIENT_ID>"`); `Payout.method`/`checkNumber` — see "Inventory Audit".
 - `AuditLog` — records `activeRole` alongside `performedById`, not just the user (security-doc requirement: interpret actions strictly in the role that performed them).
 
 ## Auth flow (`src/routes/auth.routes.ts`, `src/services/auth.service.ts`)
@@ -166,7 +167,7 @@ staff-or-own-account authorization check as `GET /:id` (`loadPrintableItems()`) 
 Consignor/Booth Owner may only print tags for their own items.
 
 **Every print goes through `printItemsAsJob()`** (`src/services/printJobs.service.ts`):
-it calls `printTagBatch()` and records one `PrintJob` (who, active role, `source`) with a
+it calls `printTagBatch()`, stamps `Item.tagPrintedAt`, and records one `PrintJob` (who, active role, `source`) with a
 `PrintJobItem` per tag snapshotting sku/description/price/category/size as printed,
 plus one `PRINT_TAG` audit entry per item (carrying `printJobId`). That's what Reports >
 Print Queues browses and reprints (`GET /reports/print-jobs`, `GET /reports/print-jobs/:id`,
@@ -264,6 +265,34 @@ ids with one raw join scoped to the account — Prisma's `lines: { some: { item:
 scanned every `PayoutLine` in the store (~7s on migrated data) — and leans on
 `Payout @@index([accountId, createdAt])`; ~100ms for the busiest migrated consignor.
 
+## Inventory Audit (`src/routes/audit.routes.ts`, `src/services/inventoryAudit.service.ts`)
+
+Explorer over the store's active items (`AVAILABLE`/`PENDING`, ~22k on the real DB).
+Each item gets derived dimensions computed as SQL `CASE` expressions over `Item ⋈
+Account` (`DIMENSIONS`: `expired`, `age`, `owner`, `accountStatus`, `ownerLastSale`,
+`tagged`, `donate`, `split`, `category`, `price`, `status`, `label`); one query string
+param per dimension filters (`?age=1-3y,3y%2B`). Measures: count, retail (`price`),
+consignor share (`price × effective split`, 0 for store-owned accounts), store share.
+Effective split = `item.consignorPercent ?? account.splitPercent ?? 100` — the
+checkout rule. `CONSIGNMENT_DAYS = 90` (Hidden Treasures' policy) drives "expired".
+Raw queries number their params (`?1` = now, `?2` = storeId); aggregates go through
+`Number()` (SQLite returns integer sums as BigInt, which crashes `res.json`).
+
+- `GET /summary?groupBy=` — totals (all filters), the pivot (**faceted**: ignores the
+  grouped dimension's own filter so all its values stay selectable), and label progress
+  over the whole active set. ~100ms.
+- `GET /items` — paged rows (`sort` intake/price/sku/account/category).
+- `POST /label { label|null, itemIds | filters }` — sets/clears `auditLabel` on items
+  not yet applied; one summary `AUDIT_LABEL` audit entry (labels are working notes).
+- `POST /apply { label }` (**Owner/Admin**) — applies every pending item with that label:
+  `EXPIRED_TO_STORE` moves it to the store's built-in `STORE` account (stays on the
+  floor), `DONATE`/`RETURN`/`WRITE_OFF` set `DONATED`/`RETURNED`/`DISPOSED`; `KEEP` is a
+  no-op. Stamps `auditAppliedAt`; per item an `ItemHistory` entry and an audit entry.
+- `GET /obligations` — positive/negative balances (balance-bearing accounts), aged by
+  last intake/sale/payout, top 50, all negatives, and floor value by owner.
+
+Labels: `AUDIT_LABELS` in `lib/enums.ts`. Everything is Manager+ except apply.
+
 ## Item edit / delete (`src/routes/items.routes.ts`)
 
 `PATCH /items/:id` (staff) edits any subset of an item's fields and records each change
@@ -291,7 +320,9 @@ creates one `Sale` per cart line, flips items to `SOLD` (stamping `Item.soldAt`)
 only when `isBalanceBearing()` (so not Donor/Store/store-flagged accounts). Inactive
 accounts are still credited: money owed is real even on a dormant account. Every line
 of one checkout shares a `transactionId` (UUID) and one `saleDate`, so reports count
-tickets, not lines.
+tickets, not lines. The credit uses the item's own split when it has one
+(`item.consignorPercent ?? account.splitPercent` — migrated Liberty items carry one; an
+item at 0% credits nothing), and `generatePaidPayout()` itemizes with the same rule.
 
 ## Reports (`src/routes/reports.routes.ts`)
 

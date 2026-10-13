@@ -11,7 +11,8 @@
     "validate": "tsx scripts/validate.ts",
     "create-test-login": "tsx scripts/create-test-login.ts",
     "typecheck": "tsc --noEmit",
-    "backfill-transactions": "tsx scripts/backfill-transactions.ts"
+    "backfill-transactions": "tsx scripts/backfill-transactions.ts",
+    "repair-ledger": "tsx scripts/repair-ledger.ts"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

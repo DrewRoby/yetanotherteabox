@@ -38,6 +38,12 @@ export type PayoutStatus = (typeof PAYOUT_STATUSES)[number];
 export const PAYOUT_LINE_TYPES = ["SALE", "PURCHASE", "RETURN", "DEDUCTION", "FEE", "ADVANCE", "ADJUSTMENT"] as const;
 export type PayoutLineType = (typeof PAYOUT_LINE_TYPES)[number];
 
+// Item.auditLabel — Inventory Audit classifications (src/services/inventoryAudit.service.ts).
+// Applying a label: KEEP → nothing; EXPIRED_TO_STORE → item moves to the store's own
+// account; DONATE → DONATED; RETURN → RETURNED; WRITE_OFF → DISPOSED.
+export const AUDIT_LABELS = ["KEEP", "EXPIRED_TO_STORE", "DONATE", "RETURN", "WRITE_OFF"] as const;
+export type AuditLabel = (typeof AUDIT_LABELS)[number];
+
 export function roleToAccountType(role: Role): AccountType | null {
   switch (role) {
     case "CONSIGNOR":

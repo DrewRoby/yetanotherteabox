@@ -120,7 +120,7 @@ posRouter.post("/checkout", async (req, res) => {
     // lastSaleAt for every account type (the Accounts list shows it on all tabs); the
     // balance credit only for balance-bearing ones.
     const credit = isBalanceBearing(item.account)
-      ? consignorShareOf(line.salePrice, item.account.splitPercent)
+      ? consignorShareOf(line.salePrice, item.consignorPercent ?? item.account.splitPercent)
       : null;
     await prisma.account.update({
       where: { id: item.account.id },

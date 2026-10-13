@@ -194,6 +194,22 @@ it's safe to re-run. Against the 2026-10-12 live copy: all 855,340 sales matched
 28,771 tickets. It takes about 3 minutes. Back up the file first, and stop
 `teabox.exe` while it runs.
 
+**Ledger repair on an already-loaded database** (2026-10-12, spec §3.1). The first
+load counted lifetime earnings as each consignor's balance, mapped written checks to
+`REQUESTED`, and skipped the per-item split, donate flag and tag-printed date.
+`migrate` now gets all of these right; a database loaded before that is fixed in place:
+
+```
+TEABOX_DATABASE_URL="file:<target db path>" npm run repair-ledger -- --dry-run
+TEABOX_DATABASE_URL="file:<target db path>" npm run repair-ledger
+```
+
+Each balance becomes `current − lifetime sum + unpaid sum`, so anything credited or paid
+in Teabox since the load carries through. The script also stamps `Account.legacyId`,
+and a re-run changes nothing. Against the live copy: 3,493 clients linked, balances
+$1,527,209 → $35,905, 5,934 checks marked `PAID`, about 35 seconds. Same precautions as
+above: back up first and stop `teabox.exe`.
+
 To see the result in the actual running app: install/launch the binary normally
 (`../../../install.sh`, or `~/.local/bin/teabox` if already installed) and log in with
 whichever email/temp-password pairs `migrate` printed at the end of its run. For a

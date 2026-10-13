@@ -51,6 +51,8 @@ export function serializeAccount(account: {
 
 // What a sale credits the owning account — the single formula shared by POS checkout
 // (which adds it to currentBalance) and payout itemization (which reports it per line).
+// Callers pass the item's own split when it has one (`item.consignorPercent ??
+// account.splitPercent` — migrated Liberty items carry a per-item split).
 export function consignorShareOf(salePrice: number, splitPercent: number | null): number {
   return (salePrice * (splitPercent ?? 100)) / 100;
 }
@@ -78,7 +80,7 @@ export async function generatePaidPayout(account: {
       payoutLines: { none: {} },
       ...(lastPaid ? { saleDate: { gt: lastPaid.paidAt ?? lastPaid.createdAt } } : {}),
     },
-    include: { item: { select: { id: true, description: true } } },
+    include: { item: { select: { id: true, description: true, consignorPercent: true } } },
     orderBy: { saleDate: "asc" },
   });
 
@@ -88,7 +90,7 @@ export async function generatePaidPayout(account: {
       itemId: s.item.id,
       saleId: s.id,
       description: s.item.description,
-      amount: roundCents(consignorShareOf(s.salePrice, account.splitPercent)),
+      amount: roundCents(consignorShareOf(s.salePrice, s.item.consignorPercent ?? account.splitPercent)),
     }));
   const remainder = roundCents(amount - lines.reduce((sum, l) => sum + l.amount, 0));
   if (remainder !== 0) {

@@ -46,9 +46,19 @@ export function mapPaymentType(paymentTypeId: number): string {
 const RECONCILE_STATUS_TO_TEABOX: Record<string, string> = {
   P: "PAID", // Paid
   R: "PAID", // Reconciled
-  N: "REQUESTED", // Not yet reconciled
+  // Not yet bank-reconciled. At Hidden Treasures every N payout is a *check* (P ones are
+  // cash) — written and handed over, just never reconciled in Liberty — so it's paid.
+  // (First load mapped this to REQUESTED; fixed in place by scripts/repair-ledger.ts.)
+  N: "PAID",
   D: "REJECTED", // Deleted/voided
 };
+
+// PAYMENT_ACT_ID → Payout.method (1 Check, 2 Cash; 3 "Reconciliation" has no method).
+export function mapPayoutMethod(paymentActId: number | null): string | null {
+  if (paymentActId === 1) return "CHECK";
+  if (paymentActId === 2) return "CASH";
+  return null;
+}
 
 export function mapPayoutStatus(reconcileStatus: string | null): string {
   if (!reconcileStatus) return "REQUESTED";

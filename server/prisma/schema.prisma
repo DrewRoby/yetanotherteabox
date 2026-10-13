@@ -101,6 +101,7 @@ model Account {
   currentBalance Float     @default(0)
   isStoreAccount Boolean   @default(false) // an extra store-owned account (e.g. a shop's per-year "2019 Inventory" bucket): store-owned rules like the STORE type, but keeps its own accountType/history — see isBalanceBearing() in src/services/accounts.service.ts
   isActive       Boolean   @default(true) // false = dormant: hidden from default lists/pickers, excluded from payout-obligation totals, no new intake; balance kept — see server/CLAUDE.md "Accounts"
+  legacyId       String? // source-system id for migrated accounts, e.g. "liberty:<CLIENT_ID>" — traces an account back to the old system's ledger
   lastSaleAt     DateTime? // denormalized MAX(Sale.saleDate) over this account's items — stamped by POS checkout, so the Accounts list doesn't aggregate ~1M sales per load
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
@@ -111,6 +112,7 @@ model Account {
   payouts   Payout[]
 
   @@index([storeId, accountType])
+  @@index([legacyId])
 }
 
 // `status` is one of: PENDING, AVAILABLE, SOLD, DONATED, DISPOSED, RETURNED.
@@ -134,6 +136,18 @@ model Item {
   price           Float // "standard" price — the sale price
   pricePremium    Float?
   cost            Float? // acquisition cost basis, e.g. for buy-outright/trade items. No current write path (see server/CLAUDE.md).
+  // Per-item consignor share (%), overriding Account.splitPercent at checkout/payout —
+  // Liberty sets the split per item (PRICE_CODE: 50/50, 30S/70C, "100% TO STORE" = 0).
+  // Null = use the account's split. No write path in the app yet (migration only).
+  consignorPercent Int?
+  donateIfUnsold   Boolean? // consignor agreed unsold items are donated (Liberty ITEM.DONATE_IND); null = unknown
+  tagPrintedAt     DateTime? // latest tag print — stamped by printItemsAsJob(); Liberty TAG_PRINTED_TS for migrated items
+  // Inventory Audit classification (src/services/inventoryAudit.service.ts): a label is a
+  // reviewable decision; "applying" it changes status/ownership and stamps auditAppliedAt.
+  auditLabel       String?
+  auditLabeledAt   DateTime?
+  auditLabeledById String?
+  auditAppliedAt   DateTime?
   accountId       String
   storeId         String
   // Denormalized for sorting/filtering ~1M items (computing them live took ~7s store-wide):
@@ -161,6 +175,7 @@ model Item {
   @@index([storeId, soldAt])
   @@index([storeId, paidOutAt])
   @@index([storeId, category])
+  @@index([storeId, auditLabel])
   // Same three sorts scoped to one account (its Items table): without these SQLite walks
   // the store-wide date index filtering by account — seconds for an account whose
   // items are old.
@@ -226,6 +241,8 @@ model Payout {
   status       String    @default("REQUESTED")
   createdAt    DateTime  @default(now())
   paidAt       DateTime?
+  method       String? // "CASH" | "CHECK" — how it was paid (Liberty PAYMENT_ACT); null = not recorded
+  checkNumber  String?
 
   account Account      @relation(fields: [accountId], references: [id])
   lines   PayoutLine[]
