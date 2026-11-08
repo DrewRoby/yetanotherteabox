@@ -222,6 +222,8 @@ export async function dayDetail(storeId: string, day: Date) {
   const itemSelect = {
     id: true,
     sku: true,
+    tagAccountNumber: true,
+    accountItemNumber: true,
     description: true,
     category: true,
     account: { select: { id: true, name: true } },
@@ -276,7 +278,7 @@ export async function dayDetail(storeId: string, day: Date) {
         createdBy: { select: { name: true } },
         items: {
           orderBy: { position: "asc" },
-          select: { id: true, itemId: true, sku: true, description: true, price: true },
+          select: { id: true, itemId: true, sku: true, tagNumber: true, description: true, price: true },
         },
       },
     }),

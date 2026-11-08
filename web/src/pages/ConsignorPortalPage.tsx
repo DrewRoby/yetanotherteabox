@@ -2,12 +2,23 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { Badge, Button, StatCard } from "../components/Card";
+import { accountLabel, itemNo } from "../lib/itemNumber";
 
 interface Profile {
   name: string;
+  accountNumber: number | null;
   accountType: string;
   currentBalance?: number;
-  items: { id: string; description: string; status: string; price: number; intakeDate: string }[];
+  items: {
+    id: string;
+    sku: string;
+    tagAccountNumber: number | null;
+    accountItemNumber: number | null;
+    description: string;
+    status: string;
+    price: number;
+    intakeDate: string;
+  }[];
   payouts: { id: string; amount: number; status: string; createdAt: string }[];
 }
 
@@ -40,7 +51,7 @@ export function ConsignorPortalPage() {
         <h1 className="text-2xl font-bold border-b-2 border-gold pb-1">
           {profile.accountType === "DONOR" ? "Donor Portal" : "Consignor Portal"}
         </h1>
-        <div className="font-bold">{user?.name}</div>
+        <div className="font-bold">{accountLabel(profile)}</div>
       </div>
 
       <div className="grid grid-cols-4 gap-5 mb-10">
@@ -78,6 +89,7 @@ export function ConsignorPortalPage() {
         <thead>
           <tr className="bg-ink text-bone">
             <th className="text-left p-3 text-xs uppercase">Date</th>
+            <th className="text-left p-3 text-xs uppercase">Item #</th>
             <th className="text-left p-3 text-xs uppercase">Item Description</th>
             <th className="text-left p-3 text-xs uppercase">Status</th>
             <th className="text-left p-3 text-xs uppercase">{showsBalance ? "Net Amount" : "Sold Price"}</th>
@@ -87,6 +99,7 @@ export function ConsignorPortalPage() {
           {profile.items.map((i) => (
             <tr key={i.id} className="border-b border-gray-100">
               <td className="p-3">{new Date(i.intakeDate).toLocaleDateString()}</td>
+              <td className="p-3">{itemNo(i)}</td>
               <td className="p-3">{i.description}</td>
               <td className="p-3">
                 <Badge>{i.status}</Badge>

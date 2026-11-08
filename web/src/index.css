@@ -2,8 +2,38 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Numbers in a sans-serif face (owner feedback on 0.2.0: Playfair's old-style digits were
+   hard to read). "Teabox Numerals" only covers digits and the characters that sit inside
+   numbers — # $ % , - . / : — via unicode-range, so the browser takes just those glyphs
+   from it and everything else falls through to the serif theme fonts. Local system fonts
+   (Segoe UI on Windows), so it works offline like the rest of the packaged app. Mirrors
+   tailwind.config.js's fontFamily.serif. */
+@font-face {
+  font-family: "Teabox Numerals";
+  font-weight: 400;
+  src: local("Segoe UI"), local("SegoeUI"), local("Helvetica Neue"), local("HelveticaNeue"), local("Arial"),
+    local("ArialMT"), local("Roboto"), local("DejaVu Sans");
+  unicode-range: U+0023-0025, U+002C-003A;
+}
+@font-face {
+  font-family: "Teabox Numerals";
+  font-weight: 600;
+  src: local("Segoe UI Semibold"), local("SegoeUI-Semibold"), local("Helvetica Neue Medium"),
+    local("HelveticaNeue-Medium"), local("Arial Bold"), local("Arial-BoldMT"), local("Roboto Medium");
+  unicode-range: U+0023-0025, U+002C-003A;
+}
+@font-face {
+  font-family: "Teabox Numerals";
+  font-weight: 700 900;
+  src: local("Segoe UI Bold"), local("SegoeUI-Bold"), local("Helvetica Neue Bold"), local("HelveticaNeue-Bold"),
+    local("Arial Bold"), local("Arial-BoldMT"), local("Roboto Bold"), local("DejaVu Sans Bold");
+  unicode-range: U+0023-0025, U+002C-003A;
+}
+
 body {
-  font-family: "Playfair Display", "Noto Serif SC", Georgia, serif;
+  font-family: "Teabox Numerals", "Playfair Display", "Noto Serif SC", Georgia, serif;
+  /* Equal-width digits so columns of amounts and item numbers line up. */
+  font-variant-numeric: tabular-nums;
 }
 
 /* Ming Dynasty gold corner-tick decoration used on cards throughout the wireframes. */

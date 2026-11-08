@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { ITEM_STATUSES } from "../lib/enums";
+import { parseTagNumber } from "../lib/barcode";
 
 // Filtered / sorted / paged item listing shared by the Inventory page (whole store,
 // GET /items/browse) and an account's Items table (GET /accounts/:id/items). Always
@@ -35,6 +36,8 @@ export interface ItemListQuery {
 export interface ItemListRow {
   id: string;
   sku: string;
+  tagAccountNumber: number | null;
+  accountItemNumber: number | null;
   description: string;
   category: string;
   status: string;
@@ -50,6 +53,8 @@ export interface ItemListRow {
 const ROW_SELECT = {
   id: true,
   sku: true,
+  tagAccountNumber: true,
+  accountItemNumber: true,
   description: true,
   category: true,
   status: true,
@@ -65,15 +70,20 @@ function range(from?: Date, to?: Date) {
 }
 
 export async function listItems(scope: { storeId: string; accountId?: string }, query: ItemListQuery) {
+  const tag = query.q ? parseTagNumber(query.q) : null; // "4545-12" — the number on the tag
   const where: Prisma.ItemWhereInput = {
     storeId: scope.storeId,
     ...(scope.accountId ? { accountId: scope.accountId } : {}),
     ...(query.status ? { status: query.status } : {}),
     ...(query.category ? { category: query.category } : {}),
     // Prisma's `contains` is SQLite LIKE: case-insensitive for ASCII.
-    ...(query.q
-      ? { OR: [{ sku: { contains: query.q } }, { description: { contains: query.q } }, { brand: { contains: query.q } }] }
-      : {}),
+    // A tag number ("4545-12") matches exactly that item — an index seek, where the
+    // `contains` scans take seconds over the whole store.
+    ...(tag
+      ? tag
+      : query.q
+        ? { OR: [{ sku: { contains: query.q } }, { description: { contains: query.q } }, { brand: { contains: query.q } }] }
+        : {}),
     ...(query.sold === "yes" ? { soldAt: { not: null } } : query.sold === "no" ? { soldAt: null } : {}),
     ...(query.paid === "yes" ? { paidOutAt: { not: null } } : query.paid === "no" ? { paidOutAt: null } : {}),
     ...(query.payoutNumber != null ? { payoutLines: { some: { payout: { payoutNumber: query.payoutNumber } } } } : {}),
@@ -86,12 +96,14 @@ export async function listItems(scope: { storeId: string; accountId?: string }, 
   if (paid) where.paidOutAt = paid;
 
   const dir: Prisma.SortOrder = query.desc ? "desc" : "asc";
-  const ORDER: Record<ItemSort, Prisma.ItemOrderByWithRelationInput> = {
+  const ORDER: Record<ItemSort, Prisma.ItemOrderByWithRelationInput | Prisma.ItemOrderByWithRelationInput[]> = {
     created: { intakeDate: dir },
     sold: { soldAt: dir },
     paidOut: { paidOutAt: dir },
     price: { price: dir },
-    sku: { itemNumber: dir }, // SKUs are prefixed/padded strings; itemNumber is their number
+    // The "Item #" column shows the tag number ("4545-12"): account number, then the
+    // account's sequence. Items with none (some migrated store stock) page last.
+    sku: [{ tagAccountNumber: dir }, { accountItemNumber: dir }],
     description: { description: dir },
     status: { status: dir },
     category: { category: dir },
@@ -102,21 +114,22 @@ export async function listItems(scope: { storeId: string; accountId?: string }, 
   const total = await prisma.item.count({ where });
 
   let items: Awaited<ReturnType<typeof page>>;
-  if (query.sort === "sold" || query.sort === "paidOut") {
-    // Unsold / never-paid items sort last in both directions. Paged as two segments —
-    // dated rows in date order, then undated ones — rather than ORDER BY ... NULLS LAST,
-    // which stops SQLite using the (storeId, soldAt/paidOutAt) index (~1s vs ~2ms).
-    const field = query.sort === "sold" ? "soldAt" : "paidOutAt";
+  if (query.sort === "sold" || query.sort === "paidOut" || query.sort === "sku") {
+    // Unsold / never-paid / untagged items sort last in both directions. Paged as two
+    // segments — dated rows in date order, then undated ones — rather than ORDER BY ...
+    // NULLS LAST, which stops SQLite using the (storeId, soldAt/paidOutAt/tag) index
+    // (~1s vs ~2ms).
+    const field = query.sort === "sold" ? "soldAt" : query.sort === "paidOut" ? "paidOutAt" : "tagAccountNumber";
     const dated: Prisma.ItemWhereInput = { AND: [where, { [field]: { not: null } }] };
     const undated: Prisma.ItemWhereInput = { AND: [where, { [field]: null }] };
     // total − undated: the IS NULL count is an index seek; counting the dated side
     // directly re-scans most of the store when other filters are active.
     const datedCount = total - (await prisma.item.count({ where: undated }));
-    const fromDated = await page(dated, [ORDER[query.sort], { itemNumber: "desc" }], query.offset, Math.min(query.limit, Math.max(0, datedCount - query.offset)));
+    const fromDated = await page(dated, [...[ORDER[query.sort]].flat(), { itemNumber: "desc" }], query.offset, Math.min(query.limit, Math.max(0, datedCount - query.offset)));
     const fromUndated = await page(undated, [{ itemNumber: "desc" }], Math.max(0, query.offset - datedCount), query.limit - fromDated.length);
     items = [...fromDated, ...fromUndated];
   } else {
-    items = await page(where, [ORDER[query.sort], { itemNumber: "desc" }], query.offset, query.limit);
+    items = await page(where, [...[ORDER[query.sort]].flat(), { itemNumber: "desc" }], query.offset, query.limit);
   }
 
   // Latest payout per item on this page (an item sold, returned and resold can be on several).

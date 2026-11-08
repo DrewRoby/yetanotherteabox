@@ -62,6 +62,16 @@ async function main() {
     const next = Math.max(Number(s.maxItemNumber ?? 0) + 1, Number(s.itemStartNumber));
     console.log(`  Next new item: ${s.itemPrefix}-${String(next).padStart(6, "0")}`);
   }
+  // Account numbers / tag numbers (load/numbers.ts): every account numbered (uniqueness
+  // is a DB index), and no account's counter behind a tag number already in use.
+  const unnumbered = await prisma.$queryRaw<{ n: bigint | number }[]>`
+    SELECT COUNT(*) AS n FROM Account WHERE accountNumber IS NULL;`;
+  check("every account has an accountNumber", Number(unnumbered[0].n) === 0, `${Number(unnumbered[0].n)} without`);
+  const behind = await prisma.$queryRaw<{ n: bigint | number }[]>`
+    SELECT COUNT(*) AS n FROM Account a
+    WHERE a.nextItemNumber <= (SELECT MAX(i.accountItemNumber) FROM Item i
+                               WHERE i.storeId = a.storeId AND i.tagAccountNumber = a.accountNumber);`;
+  check("every Account.nextItemNumber is past its tag numbers in use", Number(behind[0].n) === 0, `${Number(behind[0].n)} behind`);
 
   // Itemized payouts: lines sum to the payout amount. Compared by magnitude because
   // transformPayout stores |PAYOUT_AMT| while lines keep Liberty's signs (236 Liberty

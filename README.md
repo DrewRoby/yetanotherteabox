@@ -1,6 +1,6 @@
-# Teabox ERP
+# Teabox Consignment
 
-A working implementation of the "consignment-shop-in-a-box" ERP described in this
+A working implementation of the "consignment-shop-in-a-box" system described in this
 repo's planning docs (`project_requirements_document.md`, `tech_stack_document.md`,
 `backend_structure_document.md`, `security_guideline_document.md`,
 `app_flow_document.md`) and the 12-item build list in `tasks.json`: active-role-only

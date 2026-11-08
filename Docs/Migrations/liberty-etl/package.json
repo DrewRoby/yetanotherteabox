@@ -1,6 +1,6 @@
 {
   "name": "liberty-etl",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "private": true,
   "description": "One-time migration tool: Liberty by ResaleWorld (SQL Server) -> Teabox (Prisma/SQLite). Not shipped product code — see Docs/Migrations/sql_server_data_model_migration_spec.md.",
   "type": "commonjs",
@@ -12,7 +12,9 @@
     "create-test-login": "tsx scripts/create-test-login.ts",
     "typecheck": "tsc --noEmit",
     "backfill-transactions": "tsx scripts/backfill-transactions.ts",
-    "repair-ledger": "tsx scripts/repair-ledger.ts"
+    "repair-ledger": "tsx scripts/repair-ledger.ts",
+    "backfill-tag-numbers": "tsx scripts/backfill-tag-numbers.ts",
+    "sync": "tsx scripts/sync.ts"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

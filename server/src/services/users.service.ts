@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { prisma } from "../lib/prisma";
 import { sendEmail } from "../adapters/email";
+import { createNumberedAccount } from "./accounts.service";
 import { ACCOUNT_SCOPED_ROLES, roleToAccountType, type Role } from "../lib/enums";
 
 // Invite flow (Settings > Users & Permissions, app_flow_document.md): creates the
@@ -28,14 +29,12 @@ export async function inviteUser(params: {
   let accountId: string | undefined;
   const accountType = roleToAccountType(params.role);
   if (accountType) {
-    const account = await prisma.account.create({
-      data: {
-        storeId: params.storeId,
-        accountType,
-        name: params.accountName || params.name,
-        email: params.email,
-        splitPercent: ACCOUNT_SCOPED_ROLES.includes(params.role) ? params.splitPercent ?? 60 : undefined,
-      },
+    const account = await createNumberedAccount({
+      storeId: params.storeId,
+      accountType,
+      name: params.accountName || params.name,
+      email: params.email,
+      splitPercent: ACCOUNT_SCOPED_ROLES.includes(params.role) ? params.splitPercent ?? 60 : undefined,
     });
     accountId = account.id;
   }

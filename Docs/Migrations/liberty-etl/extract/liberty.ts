@@ -19,6 +19,8 @@ export async function fetchStore(): Promise<LibertyStoreRow> {
 
 export interface LibertyClientRow {
   CLIENT_ID: number;
+  ACCOUNT: number; // the account number staff know (e.g. 4545) — unique, distinct from CLIENT_ID
+  NEXT_ITEM_NUM: number | null; // the client's next ITEM_NUM (items are numbered per account)
   CLIENT_TYPE_ID: number;
   FIRST_NAME: string | null;
   LAST_NAME: string | null;
@@ -38,7 +40,7 @@ export interface LibertyClientRow {
 export async function fetchOrdinaryClients(): Promise<LibertyClientRow[]> {
   const pool = await getPool();
   const result = await pool.request().query(`
-    SELECT CLIENT_ID, CLIENT_TYPE_ID, FIRST_NAME, LAST_NAME, COMPANY_NAME,
+    SELECT CLIENT_ID, ACCOUNT, NEXT_ITEM_NUM, CLIENT_TYPE_ID, FIRST_NAME, LAST_NAME, COMPANY_NAME,
            DEF_PRICE_CODE_ID, PAYMENT_ACT_ID, CREATE_TS, ACTIVE_TS, INACTIVE_TS, LAST_UPDATE_TS
     FROM CLIENT
     WHERE CLIENT_TYPE_ID IN (1, 2, 3) AND CLIENT_ID <> 101508;
@@ -159,6 +161,23 @@ export async function fetchBrandSizeAttrs(): Promise<{ ITEM_ID: number; ATTR_TYP
     JOIN ATTR_TYPE at ON ca.ATTR_TYPE_ID = at.ATTR_TYPE_ID
     JOIN ATTR_TYPE_VALUE atv ON ia.ATTR_TYPE_VALUE_ID = atv.ATTR_TYPE_VALUE_ID
     WHERE at.ATTR_TYPE_DESC LIKE '%Brand%' OR at.ATTR_TYPE_DESC LIKE '%Size%';
+  `);
+  return result.recordset;
+}
+
+// Store-owned items (no CLIENT_ITEM row) → the one client their ledger rows credit, if
+// exactly one. ~178k of Hidden Treasures' ~340k store-owned items: consignments that
+// ended up the store's after selling/expiring. Their ITEM_NUM always fits under that
+// client's NEXT_ITEM_NUM (checked 2026-11-07), i.e. it's the account they were tagged
+// under — which is what their tag number ("<ACCOUNT>-<ITEM_NUM>") needs.
+export async function fetchLedgerClientOfStoreItems(): Promise<{ ITEM_ID: number; CLIENT_ID: number }[]> {
+  const pool = await getPool();
+  const result = await pool.request().query(`
+    SELECT t.ITEM_ID, MIN(t.CLIENT_ID) AS CLIENT_ID
+    FROM CLIENT_TRANS t
+    WHERE t.ITEM_ID IS NOT NULL AND NOT EXISTS (SELECT 1 FROM CLIENT_ITEM ci WHERE ci.ITEM_ID = t.ITEM_ID)
+    GROUP BY t.ITEM_ID
+    HAVING MIN(t.CLIENT_ID) = MAX(t.CLIENT_ID);
   `);
   return result.recordset;
 }

@@ -14,6 +14,7 @@ import {
   type AuditLabelKey,
   type Dimension,
 } from "./auditVocab";
+import { itemNo } from "../../lib/itemNumber";
 
 interface Measures {
   count: number;
@@ -30,6 +31,8 @@ interface Summary {
 interface AuditItem {
   id: string;
   sku: string;
+  tagAccountNumber: number | null;
+  accountItemNumber: number | null;
   description: string;
   category: string;
   price: number;
@@ -247,7 +250,7 @@ export function Explorer({
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search SKU, description, account…"
+            placeholder="Search item # (4545-12), SKU, description, account…"
             className="ml-auto border border-ink px-2 py-1 text-sm w-64"
           />
         </div>
@@ -451,7 +454,7 @@ export function Explorer({
                     aria-label="Select this page"
                   />
                 </th>
-                <SortTh label="SKU" k="sku" sort={sort} dir={dir} onSort={sortBy} />
+                <SortTh label="Item #" k="sku" sort={sort} dir={dir} onSort={sortBy} />
                 <th className="text-left p-2 border-b-2 border-gold text-xs uppercase">Description</th>
                 <SortTh label="Category" k="category" sort={sort} dir={dir} onSort={sortBy} />
                 <SortTh label="Account" k="account" sort={sort} dir={dir} onSort={sortBy} />
@@ -479,12 +482,12 @@ export function Explorer({
                         type="checkbox"
                         checked={on}
                         onChange={() => toggleRow(r.id)}
-                        aria-label={`Select ${r.sku}`}
+                        aria-label={`Select ${itemNo(r)}`}
                       />
                     </td>
                     <td className="p-2 whitespace-nowrap">
-                      <Link to={`/inventory/${r.id}`} className="font-mono text-xs hover:text-crimson hover:underline">
-                        {r.sku}
+                      <Link to={`/inventory/${r.id}`} className="text-xs hover:text-crimson hover:underline" title={`SKU ${r.sku}`}>
+                        {itemNo(r)}
                       </Link>
                     </td>
                     <td className="p-2">{r.description}</td>

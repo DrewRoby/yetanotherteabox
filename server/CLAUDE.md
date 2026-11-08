@@ -31,13 +31,14 @@ no shared package).
 - `User` — auth identity only (email/passwordHash/name, plus `badgeCodeHash`/`badgeIssuedAt` for sign-in-sheet badges — see "Sign-in-sheet badges" below). Never carries roles directly.
 - `UserRole` — `(userId, role, storeId, accountId?)`. One row per role a person holds; a user with both `MANAGER` and `CONSIGNOR` rows still only acts as one per session. `accountId` set for account-scoped roles (Consignor/Vendor/Donor/Booth Owner) — links the grant to the `Account` it acts on.
 - `Store` — one per shop. `itemPrefix`/`itemStartNumber` drive new item tags (see "Barcode values").
-- `Account` — polymorphic party items/payouts attach to: `accountType ∈ {CONSIGNOR, VENDOR, DONOR, BOOTH_OWNER, STORE}`. Every store has exactly one `STORE`-type account (store-owned inventory) so intake always has a target. `isStoreAccount` flags *additional* store-owned accounts (a shop's per-year "2019 Inventory" buckets, kept separate for their history) under an ordinary `CONSIGNOR`/`VENDOR`/`BOOTH_OWNER` type. **`isBalanceBearing()` (`src/services/accounts.service.ts`) is the one rule for "is this account owed money"** — balance-bearing type *and* not flagged; checkout credits, payouts, `serializeAccount()`'s balance stripping (Donor/Store/flagged — removed from the API response, not just hidden in the UI) and the dashboard's pending-payout total (`BALANCE_BEARING_WHERE`) all use it. Don't test `BALANCE_BEARING_ACCOUNT_TYPES` alone. `isActive` = dormant flag (see "Active flag" under Accounts). `lastSaleAt` is denormalized (see Accounts). `mailingAddress` (free text, like `Store.location`) and `paymentMethod` have **no current write path** — populated only by direct SQL (e.g. a migration), not reachable via any route or UI today.
-- `Item` — `accountId` is **required** (no intake without an account). `status ∈ {PENDING, AVAILABLE, SOLD, DONATED, DISPOSED, RETURNED}`. `cost` (acquisition cost basis) has **no current write path**, same as `consignmentType`. `sku` is also the barcode value (see below) — POS scan lookup, the printed tag, and the web `Barcode` component all key off it. `itemNumber` (`@@unique([storeId, itemNumber])`) is the number encoded in `sku` — see "Barcode values" for the invariant. `soldAt`/`paidOutAt` are denormalized latest sale/payout dates for list sorting (see "Item lists").
+- `Account` — polymorphic party items/payouts attach to: `accountType ∈ {CONSIGNOR, VENDOR, DONOR, BOOTH_OWNER, STORE}`. Every store has exactly one `STORE`-type account (store-owned inventory) so intake always has a target. `isStoreAccount` flags *additional* store-owned accounts (a shop's per-year "2019 Inventory" buckets, kept separate for their history) under an ordinary `CONSIGNOR`/`VENDOR`/`BOOTH_OWNER` type. **`isBalanceBearing()` (`src/services/accounts.service.ts`) is the one rule for "is this account owed money"** — balance-bearing type *and* not flagged; checkout credits, payouts, `serializeAccount()`'s balance stripping (Donor/Store/flagged — removed from the API response, not just hidden in the UI) and the dashboard's pending-payout total (`BALANCE_BEARING_WHERE`) all use it. Don't test `BALANCE_BEARING_ACCOUNT_TYPES` alone. `isActive` = dormant flag (see "Active flag" under Accounts). `lastSaleAt` is denormalized (see Accounts). `accountNumber` (`@@unique([storeId, accountNumber])`) is the number staff know an account by and `nextItemNumber` its item-tag counter — see "Account and tag numbers". `mailingAddress` (free text, like `Store.location`) and `paymentMethod` have **no current write path** — populated only by direct SQL (e.g. a migration), not reachable via any route or UI today.
+- `Item` — `accountId` is **required** (no intake without an account). `status ∈ {PENDING, AVAILABLE, SOLD, DONATED, DISPOSED, RETURNED}`. `cost` (acquisition cost basis) has **no current write path**, same as `consignmentType`. `sku` is also the barcode value (see below) — POS scan lookup, the printed tag, and the web `Barcode` component all key off it. `itemNumber` (`@@unique([storeId, itemNumber])`) is the number encoded in `sku` — see "Barcode values" for the invariant. `tagAccountNumber`/`accountItemNumber` are the human item number "4545-12" — see "Account and tag numbers". `soldAt`/`paidOutAt` are denormalized latest sale/payout dates for list sorting (see "Item lists").
 - `ItemHistory`, `Photo`, `Sale`, `Device`, `Heartbeat` — as named.
 - `Payout` — `payoutNumber` is the human-facing "Payout #" (migrated payouts keep the source system's number; new ones `nextPayoutNumber()`).
 - `PayoutLine` — itemization of a `Payout`; a `Sale` with a line counts as paid out. See "Accounts" below.
 - `Sale.transactionId` — the ticket (one checkout); see "POS" and "Reports".
 - `PrintJob` / `PrintJobItem` — every tag print run plus a snapshot of each tag; see "Ticket printing".
+- `SyncRun` — one applied source → Teabox sync (liberty-etl `npm run sync`; later the cloud sync): source, as-of, counts/conflicts JSON. `Payout.legacyId` (`"liberty:<PAYOUT_ID>"`, unique) marks payouts that came from Liberty; null = made in Teabox. See `Docs/sync-design.md`.
 - `Item.consignorPercent` (per-item split, overrides `Account.splitPercent`), `donateIfUnsold`, `tagPrintedAt` and the `audit*` columns; `Account.legacyId` (`"liberty:<CLIENT_ID>"`); `Payout.method`/`checkNumber` — see "Inventory Audit".
 - `AuditLog` — records `activeRole` alongside `performedById`, not just the user (security-doc requirement: interpret actions strictly in the role that performed them).
 
@@ -146,6 +147,37 @@ Settings > Store (`GET/PUT /settings/store`: view Manager+, edit Owner/Admin, au
 `UPDATE_ITEM_NUMBERING`; the GET includes a `nextSku` preview). History: this replaced
 `${storeId}-${count + 1}` (2026-10-11), which replaced an earlier
 `generateSku(category)`.
+
+## Account and tag numbers (2026-11-07)
+
+Staff identify accounts by number and items as **`<account#>-<item#>`** (e.g.
+`4545-12`) — Liberty's `CLIENT.ACCOUNT` + `ITEM.ITEM_NUM`, where item numbers are
+per account. Teabox keeps this alongside the SKU, which stays the barcode value:
+
+- `Account.accountNumber` — every account creation path goes through
+  `createNumberedAccount()` (`services/accounts.service.ts`), which takes
+  `nextAccountNumber()`: one past the end of the **first run of numbers with no gap
+  over 100**, not plain max + 1 — Liberty reserves high numbers (5000, 7000, 800xx store
+  buckets, 999997 "Purged Account", 999999 "Cash Sales") that must not drag the
+  sequence to 1,000,000.
+- `Item.tagAccountNumber` / `accountItemNumber` — assigned by `nextItemIdentity(tx,
+  storeId, accountId)` at intake from the account's number and `Account.nextItemNumber`
+  (never at or below a number already used under that account number), which it then
+  advances. **Fixed once assigned**: moving an item to another account (item edit,
+  Inventory Audit "Expired → Store") doesn't renumber it — it's what's printed on the
+  tag. So an item's tag account number can differ from its current owner's. Not unique
+  (index only): Liberty itself numbered 164 old store-owned items twice.
+- `formatTagNumber()` / `parseTagNumber()` (`lib/barcode.ts`). Every item search box
+  (`/items/browse` and account items via `itemList.service.ts`, `GET /items`, POS
+  `/lookup` and `/inventory-search`, the audit explorer, Print Queues via the
+  `PrintJobItem.tagNumber` snapshot) treats a `"<n>-<n>"` query as an exact tag-number
+  match — an index seek, deliberately *instead of* the `contains` scans (2.8s → 0.4s on
+  the real data). "Item #" sorts page tagged items, then untagged ones (two segments,
+  like the sold/paid date sorts). The printed tag (`printer.ts`) carries the tag number.
+- Migrated data: `liberty-etl`'s `load/numbers.ts` (run by `migrate`, `sync`, and
+  `npm run backfill-tag-numbers`). ~162k migrated items (2.4k of them on the floor) have
+  no tag number — store-owned stock Liberty no longer links to any account; the UI
+  shows their SKU.
 
 See `web/CLAUDE.md`'s "Barcode scanning" section for the read side — a physical USB
 scanner needs no server-side integration at all (it's a keyboard, not a device with a
@@ -345,6 +377,23 @@ SQLite DateTimes as integer epoch ms). Manager/Owner/Admin only.
   intake, `PRICE_CHANGE` history entry (`ItemHistory @@index([timestamp])`), print job
   and paid payout. Lists cap at 1000 rows and report `total` (migrated bulk-intake days).
 - Print queues — see "Ticket printing" above.
+
+- **Payouts** (`services/payoutReport.service.ts`, 2026-11-07) — `GET /payouts?accountId=&from=&to=&q=&status=PAID|ALL&page=&pageSize=`
+  (list + `total`/`totalAmount`; `q` = item # "4545-12" → the payouts whose lines paid that
+  item, digits → payout #/check #, text → item description when `accountId` is set, else
+  account name) and `GET /payouts/statement?accountId=&from=&to=` (every non-REJECTED payout
+  in range fully itemized, plus `unpaid`: sales not yet paid via `unpaidSalesOf()` — the
+  same rule `generatePaidPayout()` uses — and `otherBalance`, the part of
+  `currentBalance` no unpaid sale explains, so a statement always reconciles to the
+  balance). Dates are local day keys on `createdAt`. Store scoping is `accountId IN
+  (store's accounts)`, not `account: { storeId }` (~230ms over 55k payouts), and item
+  counts are one `groupBy` for the page (a filtered relation `_count` took ~900ms).
+- **Active Items** — `GET /active-items?accountId=&q=&category=&status=&sort=&dir=&page=&pageSize`
+  (up to 50,000 for the PDF): the Inventory Audit's active set and split rule
+  (`auditItems` + `activeTotals`). With an account filter, `where()` writes `+i."storeId"`
+  so SQLite uses the accountId index instead of walking the store-wide tag index (1.2s → 36ms).
+- These three are **staff-wide** (Employees too — the account page's "Print for consignor"
+  buttons use them); everything else under `/reports` is Manager+.
 
 Liberty-era transactions are nightly *posting batches* (the owner keys the day's paper
 tickets into Liberty each evening), so their `transactionId` groups aren't checkouts

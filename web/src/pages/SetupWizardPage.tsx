@@ -65,7 +65,7 @@ export function SetupWizardPage() {
     <div className="min-h-screen flex flex-col items-center justify-center bg-bone px-4">
       <div className="fixed top-0 w-full h-[60px] bg-white border-b-2 border-ink flex items-center px-6">
         <div className="w-[34px] h-[34px] bg-crimson text-white flex items-center justify-center font-bold rounded-sm mr-4">茶</div>
-        <div className="font-bold uppercase tracking-wide">Teabox ERP — First-Time Setup</div>
+        <div className="font-bold uppercase tracking-wide">Teabox Consignment — First-Time Setup</div>
       </div>
 
       <div className="corner-ticks bg-white border border-ink w-[480px] shadow-xl">

@@ -13,7 +13,8 @@ export default {
         bone2: "#f5f2e9",
       },
       fontFamily: {
-        serif: ['"Playfair Display"', '"Noto Serif SC"', "Georgia", "serif"],
+        // "Teabox Numerals" = sans-serif digits only (unicode-range @font-face in index.css).
+        serif: ['"Teabox Numerals"', '"Playfair Display"', '"Noto Serif SC"', "Georgia", "serif"],
       },
     },
   },

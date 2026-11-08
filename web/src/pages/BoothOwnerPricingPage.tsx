@@ -2,10 +2,13 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { Button, Card } from "../components/Card";
+import { itemNo } from "../lib/itemNumber";
 
 interface PricedItem {
   id: string;
   sku: string;
+  tagAccountNumber: number | null;
+  accountItemNumber: number | null;
   description: string;
   price: number;
 }
@@ -61,7 +64,7 @@ export function BoothOwnerPricingPage() {
     const newPrice = Number(draft);
     if (!Number.isFinite(newPrice) || newPrice <= 0) return;
     await api.put(`/items/${item.id}/price`, { price: newPrice });
-    addLog(`SKU ${item.sku} adjusted to $${newPrice.toFixed(2)}`);
+    addLog(`Item ${itemNo(item)} adjusted to $${newPrice.toFixed(2)}`);
     setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, price: newPrice } : i)));
   }
 
@@ -118,7 +121,7 @@ export function BoothOwnerPricingPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-bone">
-                <th className="p-3 text-left text-xs uppercase border-b-2 border-gold">SKU</th>
+                <th className="p-3 text-left text-xs uppercase border-b-2 border-gold">Item #</th>
                 <th className="p-3 text-left text-xs uppercase border-b-2 border-gold">Description</th>
                 <th className="p-3 text-left text-xs uppercase border-b-2 border-gold">Current</th>
                 <th className="p-3 text-left text-xs uppercase border-b-2 border-gold">Action</th>
@@ -127,7 +130,9 @@ export function BoothOwnerPricingPage() {
             <tbody>
               {items.map((item) => (
                 <tr key={item.id} className="border-b border-gray-100">
-                  <td className="p-3 font-mono text-xs">{item.sku}</td>
+                  <td className="p-3 text-xs" title={`SKU ${item.sku}`}>
+                    {itemNo(item)}
+                  </td>
                   <td className="p-3">{item.description}</td>
                   <td className="p-3">
                     <input

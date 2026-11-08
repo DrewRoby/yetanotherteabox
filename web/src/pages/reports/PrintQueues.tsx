@@ -4,6 +4,7 @@ import { api, ApiError } from "../../api/client";
 import { Badge, Button, Card } from "../../components/Card";
 import { Pager, rangeLabel } from "../../components/Pager";
 import { TagLabel } from "../../components/TagLabel";
+import { itemNo } from "../../lib/itemNumber";
 import { PRINT_SOURCE_LABEL } from "./DayDetail";
 import { localDateKey, money } from "./reportFormat";
 
@@ -15,7 +16,7 @@ interface JobRow {
   activeRole: string | null;
   reprintOfId: string | null;
   createdBy: { name: string } | null;
-  items: { sku: string; description: string }[];
+  items: { sku: string; tagNumber: string | null; description: string }[];
 }
 interface JobList {
   rows: JobRow[];
@@ -36,6 +37,7 @@ interface JobDetail {
     id: string;
     itemId: string | null;
     sku: string;
+    tagNumber: string | null; // as printed; null for runs before tag numbers existed
     description: string;
     price: number;
     category: string | null;
@@ -43,6 +45,8 @@ interface JobDetail {
     item: {
       id: string;
       sku: string;
+      tagAccountNumber: number | null;
+      accountItemNumber: number | null;
       description: string;
       price: number;
       status: string;
@@ -139,7 +143,7 @@ function JobListView({
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="SKU or description"
+              placeholder="Item #, SKU or description"
               className="block border border-ink px-2 py-1 text-sm font-normal normal-case w-52"
             />
           </label>
@@ -217,7 +221,7 @@ function JobListView({
                 </td>
                 <td className="p-2 text-right font-bold">{j.itemCount}</td>
                 <td className="p-2 text-xs text-gray-600">
-                  {j.items.map((i) => `${i.sku} ${i.description.slice(0, 24)}`).join(", ")}
+                  {j.items.map((i) => `${itemNo(i)} ${i.description.slice(0, 24)}`).join(", ")}
                   {j.itemCount > j.items.length && ` +${j.itemCount - j.items.length} more`}
                 </td>
               </tr>
@@ -386,7 +390,7 @@ function JobView({ id, onOpenJob }: { id: string; onOpenJob: (id: string | null)
                     type="checkbox"
                     checked={selected.has(line.id)}
                     onChange={() => toggle(line.id)}
-                    aria-label={`Select ${line.sku} for reprint`}
+                    aria-label={`Select ${itemNo(line)} for reprint`}
                   />
                 ) : undefined
               }

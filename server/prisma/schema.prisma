@@ -1,4 +1,4 @@
-// Teabox ERP data model.
+// Teabox Consignment data model.
 //
 // NOTE: datasource is SQLite for zero-setup local/offline operation (this doubles as
 // the "offline fallback engine" described in backend_structure_document.md). To point
@@ -102,6 +102,12 @@ model Account {
   isStoreAccount Boolean   @default(false) // an extra store-owned account (e.g. a shop's per-year "2019 Inventory" bucket): store-owned rules like the STORE type, but keeps its own accountType/history — see isBalanceBearing() in src/services/accounts.service.ts
   isActive       Boolean   @default(true) // false = dormant: hidden from default lists/pickers, excluded from payout-obligation totals, no new intake; balance kept — see server/CLAUDE.md "Accounts"
   legacyId       String? // source-system id for migrated accounts, e.g. "liberty:<CLIENT_ID>" — traces an account back to the old system's ledger
+  // The number staff know the account by (Liberty CLIENT.ACCOUNT, e.g. 4545 — not CLIENT_ID).
+  // New accounts take one past the store's highest (nextAccountNumber in accounts.service.ts).
+  accountNumber  Int?
+  // Next per-account item sequence for tag numbers "<accountNumber>-<n>" (Liberty
+  // CLIENT.NEXT_ITEM_NUM) — see nextItemIdentity in items.service.ts.
+  nextItemNumber Int       @default(1)
   lastSaleAt     DateTime? // denormalized MAX(Sale.saleDate) over this account's items — stamped by POS checkout, so the Accounts list doesn't aggregate ~1M sales per load
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
@@ -111,6 +117,7 @@ model Account {
   items     Item[]
   payouts   Payout[]
 
+  @@unique([storeId, accountNumber])
   @@index([storeId, accountType])
   @@index([legacyId])
 }
@@ -120,6 +127,13 @@ model Item {
   id              String    @id @default(cuid())
   sku             String    @unique // barcode value: formatBarcode(storeId, itemNumber) — see src/lib/barcode.ts
   itemNumber      Int // sequential per store, assigned alongside sku in the same transaction (src/routes/items.routes.ts)
+  // The number staff read off the tag: "<tagAccountNumber>-<accountItemNumber>", e.g.
+  // "4545-12" (Liberty: CLIENT.ACCOUNT + ITEM.ITEM_NUM). Fixed at intake from the owning
+  // account's number + its next item sequence; deliberately NOT changed when the item
+  // moves to another account (e.g. Expired -> Store) — it's what's printed on the tag.
+  // Null on migrated items whose original account Liberty no longer records.
+  tagAccountNumber  Int?
+  accountItemNumber Int?
   description     String
   category        String
   subcategory     String?
@@ -169,6 +183,7 @@ model Item {
   printLines  PrintJobItem[]
 
   @@unique([storeId, itemNumber])
+  @@index([storeId, tagAccountNumber, accountItemNumber])
   @@index([storeId, status])
   @@index([accountId])
   @@index([storeId, intakeDate])
@@ -243,6 +258,7 @@ model Payout {
   paidAt       DateTime?
   method       String? // "CASH" | "CHECK" — how it was paid (Liberty PAYMENT_ACT); null = not recorded
   checkNumber  String?
+  legacyId     String?   @unique // source-system origin, e.g. "liberty:<PAYOUT_ID>"; null = created in Teabox
 
   account Account      @relation(fields: [accountId], references: [id])
   lines   PayoutLine[]
@@ -339,6 +355,7 @@ model PrintJobItem {
   position    Int
   itemId      String?
   sku         String
+  tagNumber   String? // "<account#>-<item#>" as printed (formatTagNumber); null before 2026-11-07
   description String
   price       Float
   category    String?
@@ -349,4 +366,24 @@ model PrintJobItem {
 
   @@index([printJobId])
   @@index([itemId])
+}
+
+// One run of a source → Teabox sync/reconcile (liberty-etl's `npm run sync`; later the
+// cloud sync). Kept as an audit trail and as the place a later run reads "what did we
+// last see" from. `counts` / `conflicts` are JSON. See Docs/sync-design.md.
+model SyncRun {
+  id             String    @id @default(cuid())
+  source         String // "liberty"
+  sourceServer   String? // e.g. "DESKTOP-ALTQTAR\LIBERTY"
+  sourceDatabase String?
+  sourceAsOf     DateTime? // latest activity timestamp seen in the source
+  dryRun         Boolean
+  status         String // "RUNNING" | "OK" | "FAILED"
+  startedAt      DateTime  @default(now())
+  finishedAt     DateTime?
+  counts         String? // JSON
+  conflicts      String? // JSON
+  error          String?
+
+  @@index([source, startedAt])
 }

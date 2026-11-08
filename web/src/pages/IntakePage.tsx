@@ -4,6 +4,7 @@ import { api, ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { Button, Card } from "../components/Card";
 import { Barcode } from "../components/Barcode";
+import { itemNo } from "../lib/itemNumber";
 import { TagLabel } from "../components/TagLabel";
 import { AccountPicker, type AccountOption } from "../components/AccountPicker";
 
@@ -16,6 +17,7 @@ interface CvSuggestion {
 interface QueuedTicket {
   itemId: string;
   sku: string;
+  tagNumber: string;
   description: string;
   category: string;
   size: string;
@@ -42,7 +44,7 @@ export function IntakePage() {
   const [suggestion, setSuggestion] = useState<CvSuggestion | null>(null);
   const [capturing, setCapturing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [result, setResult] = useState<{ sku: string } | null>(null);
+  const [result, setResult] = useState<{ sku: string; tagNumber: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const [batch, setBatch] = useState<QueuedTicket[]>([]);
@@ -75,7 +77,18 @@ export function IntakePage() {
     setError(null);
     setSaving(true);
     try {
-      const res = await api.post<{ item: { id: string; sku: string; description: string; category: string; size: string | null; price: number } }>(
+      const res = await api.post<{
+        item: {
+          id: string;
+          sku: string;
+          tagAccountNumber: number | null;
+          accountItemNumber: number | null;
+          description: string;
+          category: string;
+          size: string | null;
+          price: number;
+        };
+      }>(
         "/items",
         {
           description,
@@ -86,12 +99,13 @@ export function IntakePage() {
           accountId: isAccountScoped ? undefined : selectedAccount?.id,
         }
       );
-      setResult({ sku: res.item.sku });
+      setResult({ sku: res.item.sku, tagNumber: itemNo(res.item) });
       setBatch((b) => [
         ...b,
         {
           itemId: res.item.id,
           sku: res.item.sku,
+          tagNumber: itemNo(res.item),
           description: res.item.description,
           category: res.item.category,
           size: res.item.size || "",
@@ -172,7 +186,7 @@ export function IntakePage() {
 
       {result && (
         <Card className="mb-5 bg-white border-crimson">
-          <span className="font-bold text-crimson">Saved.</span> Item <span className="font-mono">{result.sku}</span> created and
+          <span className="font-bold text-crimson">Saved.</span> Item <span className="font-bold">{result.tagNumber}</span> created and
           queued in the tag batch below.
         </Card>
       )}

@@ -16,7 +16,8 @@ import path from "path";
 const PRINT_JOBS_DIR = process.env.TEABOX_PRINT_JOBS_DIR || path.join(__dirname, "..", "..", "var", "print-jobs");
 
 export interface TagTicket {
-  sku: string;
+  sku: string; // the barcode value
+  tagNumber?: string; // "<account#>-<item#>" — the number staff read (formatTagNumber)
   description: string;
   price: number;
   category?: string;
@@ -35,11 +36,12 @@ export async function printTag(ticket: TagTicket): Promise<PrintResult> {
   const pertinent = [ticket.category, ticket.size ? `Size ${ticket.size}` : null].filter(Boolean).join(" · ");
   const rendered = [
     "================================",
-    "           TEABOX ERP",
+    "       TEABOX CONSIGNMENT",
     "================================",
     ticket.description.slice(0, 32),
     ...(pertinent ? [pertinent.slice(0, 32)] : []),
     `PRICE: $${ticket.price.toFixed(2)}`,
+    ...(ticket.tagNumber ? [`ITEM#: ${ticket.tagNumber}`] : []),
     `SKU:   ${ticket.sku}`,
     "|||||  ||  |  |||  ||  |||||", // stand-in barcode glyph
     "================================",

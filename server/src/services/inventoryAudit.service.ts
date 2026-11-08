@@ -1,4 +1,5 @@
 import { prisma } from "../lib/prisma";
+import { parseTagNumber } from "../lib/barcode";
 import type { SessionClaims } from "../lib/jwt";
 import { recordAudit, recordAuditMany } from "../lib/audit";
 import { AUDIT_LABELS, type AuditLabel } from "../lib/enums";
@@ -99,7 +100,9 @@ const FROM = `FROM "Item" i JOIN "Account" a ON a."id" = i."accountId"`;
 // ?2 (?1 is `now`).
 function where(storeId: string, filters: Filters) {
   const params: unknown[] = [Date.now(), storeId];
-  const clauses = [`i."storeId" = ?2`, ACTIVE];
+  // With an account filter, `+` keeps SQLite off the store-wide indexes (it otherwise
+  // walks (storeId, tag…) for the ORDER BY: ~1.2s vs ~20ms via the accountId index).
+  const clauses = [filters.accountId ? `+i."storeId" = ?2` : `i."storeId" = ?2`, ACTIVE];
   for (const key of DIMENSION_KEYS) {
     const values = filters[key];
     if (!values?.length) continue;
@@ -110,9 +113,16 @@ function where(storeId: string, filters: Filters) {
     clauses.push(`(${DIMENSIONS[key].sql}) IN (${marks.join(",")})`);
   }
   if (filters.q) {
-    params.push(filters.q.toLowerCase());
-    const n = params.length;
-    clauses.push(`(instr(lower(i."description"), ?${n}) > 0 OR instr(lower(i."sku"), ?${n}) > 0 OR instr(lower(a."name"), ?${n}) > 0)`);
+    const tag = parseTagNumber(filters.q);
+    if (tag) {
+      // "4545-12": the tag number, exactly
+      params.push(tag.tagAccountNumber, tag.accountItemNumber);
+      clauses.push(`(i."tagAccountNumber" = ?${params.length - 1} AND i."accountItemNumber" = ?${params.length})`);
+    } else {
+      params.push(filters.q.toLowerCase());
+      const n = params.length;
+      clauses.push(`(instr(lower(i."description"), ?${n}) > 0 OR instr(lower(i."sku"), ?${n}) > 0 OR instr(lower(a."name"), ?${n}) > 0)`);
+    }
   }
   if (filters.accountId) {
     params.push(filters.accountId);
@@ -168,12 +178,20 @@ export async function auditSummary(storeId: string, filters: Filters, groupBy: D
   };
 }
 
+// Totals (count / retail / consignor share / store share) for the active set under
+// these filters — the Active Items report's summary line.
+export async function activeTotals(storeId: string, filters: Filters) {
+  const w = where(storeId, filters);
+  const [row] = await prisma.$queryRawUnsafe<MeasureRow[]>(`SELECT ${MEASURES} ${FROM} ${w.sql}`, ...w.params);
+  return measures(row);
+}
+
 const SORTS = {
-  intake: `i."intakeDate"`,
-  price: `i."price"`,
-  sku: `i."itemNumber"`,
-  account: `a."name"`,
-  category: `i."category"`,
+  intake: [`i."intakeDate"`],
+  price: [`i."price"`],
+  sku: [`i."tagAccountNumber"`, `i."accountItemNumber"`], // the "Item #" column: "<account#>-<n>"
+  account: [`a."name"`],
+  category: [`i."category"`],
 } as const;
 export type AuditSort = keyof typeof SORTS;
 
@@ -185,12 +203,13 @@ export async function auditItems(
   const w = where(storeId, filters);
   const [rows, [total]] = await Promise.all([
     prisma.$queryRawUnsafe<Record<string, unknown>[]>(
-      `SELECT i."id", i."sku", i."description", i."category", i."price", i."status", i."intakeDate",
+      `SELECT i."id", i."sku", i."tagAccountNumber", i."accountItemNumber", i."description", i."size",
+              a."accountNumber" AS "accountNumber", i."category", i."price", i."status", i."intakeDate",
               i."tagPrintedAt", i."donateIfUnsold", i."auditLabel", i."auditAppliedAt",
               ${PCT} AS "consignorPercent", a."id" AS "accountId", a."name" AS "accountName",
               a."isActive" AS "accountActive", (${DIMENSIONS.owner.sql}) AS "owner"
        ${FROM} ${w.sql}
-       ORDER BY ${SORTS[opts.sort]} ${opts.dir === "asc" ? "ASC" : "DESC"}, i."itemNumber"
+       ORDER BY ${SORTS[opts.sort].map((c) => `${c} ${opts.dir === "asc" ? "ASC" : "DESC"}`).join(", ")}, i."itemNumber"
        LIMIT ${opts.pageSize} OFFSET ${(opts.page - 1) * opts.pageSize}`,
       ...w.params
     ),
@@ -200,6 +219,9 @@ export async function auditItems(
     rows: rows.map((r) => ({
       ...r,
       price: Number(r.price),
+      tagAccountNumber: r.tagAccountNumber == null ? null : Number(r.tagAccountNumber),
+      accountNumber: r.accountNumber == null ? null : Number(r.accountNumber),
+      accountItemNumber: r.accountItemNumber == null ? null : Number(r.accountItemNumber),
       consignorPercent: Number(r.consignorPercent),
       intakeDate: new Date(Number(r.intakeDate)),
       tagPrintedAt: r.tagPrintedAt == null ? null : new Date(Number(r.tagPrintedAt)),

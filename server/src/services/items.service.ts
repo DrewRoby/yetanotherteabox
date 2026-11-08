@@ -54,14 +54,38 @@ export class IntakeAccountError extends Error {}
 // itemStartNumber later can't move numbering backwards. Call inside the same
 // interactive transaction as the create: SQLite serializes writer transactions, so
 // the read-then-create is race-free.
-export async function nextItemIdentity(tx: Prisma.TransactionClient, storeId: string) {
+//
+// With an accountId it also assigns the tag number staff read — "<account#>-<n>"
+// (Item.tagAccountNumber/accountItemNumber, Liberty's ACCOUNT-ITEM_NUM): n is the
+// account's own sequence, Account.nextItemNumber (Liberty NEXT_ITEM_NUM), but never at
+// or below a number already used under that account number, and the counter advances.
+// An account without a number (shouldn't exist — every create path numbers it) gets none.
+export async function nextItemIdentity(tx: Prisma.TransactionClient, storeId: string, accountId?: string) {
   const store = await tx.store.findUniqueOrThrow({
     where: { id: storeId },
     select: { itemPrefix: true, itemStartNumber: true },
   });
   const { _max } = await tx.item.aggregate({ where: { storeId }, _max: { itemNumber: true } });
   const itemNumber = Math.max((_max.itemNumber ?? 0) + 1, store.itemStartNumber);
-  return { itemNumber, sku: formatBarcode(store.itemPrefix, itemNumber) };
+  const identity = {
+    itemNumber,
+    sku: formatBarcode(store.itemPrefix, itemNumber),
+    tagAccountNumber: null as number | null,
+    accountItemNumber: null as number | null,
+  };
+  if (!accountId) return identity;
+  const account = await tx.account.findUniqueOrThrow({
+    where: { id: accountId },
+    select: { accountNumber: true, nextItemNumber: true },
+  });
+  if (account.accountNumber == null) return identity;
+  const used = await tx.item.aggregate({
+    where: { storeId, tagAccountNumber: account.accountNumber },
+    _max: { accountItemNumber: true },
+  });
+  const seq = Math.max(account.nextItemNumber, (used._max.accountItemNumber ?? 0) + 1);
+  await tx.account.update({ where: { id: accountId }, data: { nextItemNumber: seq + 1 } });
+  return { ...identity, tagAccountNumber: account.accountNumber, accountItemNumber: seq };
 }
 
 export async function ensureStoreAccountSeeded(storeId: string) {

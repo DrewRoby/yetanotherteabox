@@ -6,10 +6,13 @@ import { Badge, Button, Card } from "../components/Card";
 import { Barcode } from "../components/Barcode";
 import { AccountPicker, type AccountOption } from "../components/AccountPicker";
 import { money as formatMoney } from "./accounts/format";
+import { accountLabel, itemNo } from "../lib/itemNumber";
 
 interface ItemDetail {
   id: string;
   sku: string;
+  tagAccountNumber: number | null;
+  accountItemNumber: number | null;
   description: string;
   category: string;
   subcategory: string | null;
@@ -24,7 +27,14 @@ interface ItemDetail {
   price: number;
   priceQuickSale: number | null;
   pricePremium: number | null;
-  account: { id: string; name: string; accountType: string; splitPercent: number | null; currentBalance: number };
+  account: {
+    id: string;
+    accountNumber: number | null;
+    name: string;
+    accountType: string;
+    splitPercent: number | null;
+    currentBalance: number;
+  };
   history: { id: string; changeType: string; oldValue: string | null; newValue: string | null; timestamp: string }[];
   sales: { id: string; saleDate: string; salePrice: number }[];
   _count: { payoutLines: number };
@@ -99,11 +109,11 @@ export function ItemDetailPage() {
   const reprint = () =>
     run(async () => {
       await api.post("/items/print-batch", { itemIds: [item.id], source: "ITEM" });
-      setNotice(`Tag for ${item.sku} sent to the printer.`);
+      setNotice(`Tag for ${itemNo(item)} sent to the printer.`);
     });
 
   const remove = () => {
-    if (!window.confirm(`Delete "${item.description}" (${item.sku})? This can't be undone.`)) return;
+    if (!window.confirm(`Delete "${item.description}" (${itemNo(item)})? This can't be undone.`)) return;
     run(async () => {
       await api.del(`/items/${item.id}`);
       navigate("/inventory", { replace: true });
@@ -193,7 +203,7 @@ export function ItemDetailPage() {
               {item.account.name.slice(0, 2).toUpperCase()}
             </div>
             <div>
-              <div className="font-bold">{item.account.name}</div>
+              <div className="font-bold">{accountLabel(item.account)}</div>
               <div className="text-[11px] text-crimson font-bold">{item.account.accountType}</div>
             </div>
           </div>
@@ -248,7 +258,8 @@ function ItemView({ item }: { item: ItemDetail }) {
         <div>
           <label className="text-[10px] uppercase tracking-wide text-gray-500">Item Name</label>
           <h2 className="text-2xl font-bold">{item.description}</h2>
-          <div className="text-xs text-crimson font-bold mt-1">SKU: {item.sku}</div>
+          <div className="text-lg text-crimson font-bold mt-1">Item # {itemNo(item)}</div>
+          <div className="text-xs text-gray-500">SKU: {item.sku}</div>
           <Barcode value={item.sku} className="mt-2 h-12" />
         </div>
         <div className="bg-crimson2 text-white border border-ink px-4 py-2 text-center">
@@ -364,7 +375,9 @@ function EditItemForm({
       <div className="flex justify-between items-start mb-4">
         <div>
           <h2 className="text-lg font-bold uppercase">Edit Item</h2>
-          <div className="text-xs text-crimson font-bold">SKU: {item.sku}</div>
+          <div className="text-xs text-crimson font-bold">
+            Item # {itemNo(item)} · SKU: {item.sku}
+          </div>
         </div>
       </div>
       {sold && (

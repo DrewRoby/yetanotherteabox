@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
+import { accountLabel } from "../lib/itemNumber";
 
 // Type-to-search over every account in the store (a few thousand; loaded once per
-// picker). Matches name, email or phone (3+ digits) like the Accounts list search, and
+// picker). Matches account number (digits: exact match first, then prefix), name,
+// email or phone (3+ digits) like the Accounts list search, and
 // shows each account's type so duplicate names — e.g. several "Hidden Treasures" store
 // accounts — can be told apart. Keyboard: ↑/↓ to move, Enter to pick, Esc to close.
 // Used by Item Intake ("Intake For") and the item editor's Account field.
 
 export interface AccountOption {
   id: string;
+  accountNumber?: number | null;
   name: string;
   accountType: string;
   isStoreAccount?: boolean;
@@ -22,7 +25,7 @@ const typeLabel = (a: AccountOption) => (a.isStoreAccount ? "STORE ACCOUNT" : a.
 export function AccountPicker({
   value,
   onChange,
-  placeholder = "Type a name, email or phone…",
+  placeholder = "Type an account #, name, email or phone…",
   autoFocus,
   className = "",
 }: {
@@ -45,13 +48,17 @@ export function AccountPicker({
     const q = query.trim().toLowerCase();
     if (!accounts || !q) return [];
     const digits = q.replace(/\D/g, "");
+    const numberQuery = /^\d+$/.test(q) ? q : null;
+    const numberOf = (a: AccountOption) => String(a.accountNumber ?? "");
     return accounts
       .filter(
         (a) =>
+          (numberQuery != null && numberOf(a).startsWith(numberQuery)) ||
           a.name.toLowerCase().includes(q) ||
           (a.email ?? "").toLowerCase().includes(q) ||
           (digits.length >= 3 && (a.phone ?? "").replace(/\D/g, "").includes(digits))
       )
+      .sort((a, b) => Number(numberOf(b) === numberQuery) - Number(numberOf(a) === numberQuery))
       .slice(0, MAX_MATCHES);
   }, [accounts, query]);
 
@@ -83,7 +90,7 @@ export function AccountPicker({
     }
   }
 
-  const display = value ? `${value.name} (${typeLabel(value)})` : "";
+  const display = value ? `${accountLabel(value)} (${typeLabel(value)})` : "";
 
   return (
     <div className={`relative ${className}`}>
@@ -119,7 +126,7 @@ export function AccountPicker({
                 className={`w-full text-left px-2 py-1.5 text-sm flex justify-between gap-2 ${i === highlight ? "bg-bone" : ""}`}
               >
                 <span>
-                  {a.name}
+                  {accountLabel(a)}
                   {(a.phone || a.email) && <span className="ml-2 text-xs text-gray-500">{a.phone || a.email}</span>}
                 </span>
                 <span className="text-[10px] text-gray-500 uppercase whitespace-nowrap">{typeLabel(a)}</span>

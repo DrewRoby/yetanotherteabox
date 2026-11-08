@@ -7,9 +7,14 @@ import { AccountItems } from "./accounts/AccountItems";
 import { AccountPayouts } from "./accounts/AccountPayouts";
 import { formatDate, localDayStartMs, money } from "./accounts/format";
 import { Pager, rangeLabel } from "../components/Pager";
+import { accountLabel, itemNo } from "../lib/itemNumber";
+import { downloadActiveItems, downloadPayoutStatement, downloadSinglePayout, type StatementPayout } from "./reports/reportPdfs";
+
+const REPORT_ROLES = ["SYSTEM_ADMIN", "OWNER", "MANAGER"]; // mirrors the /reports nav entry (auth/roles.ts)
 
 interface AccountRow {
   id: string;
+  accountNumber: number | null; // the number staff know the account by (Liberty's ACCOUNT)
   accountType: string;
   isStoreAccount: boolean; // store-owned like the STORE type: no balance, no payouts
   isActive: boolean; // false = dormant: hidden by default, not counted as owed, no new intake
@@ -33,12 +38,13 @@ const TABS = [
 
 const CAN_CREATE_ROLES = ["SYSTEM_ADMIN", "OWNER", "MANAGER"];
 
-type SortKey = "name" | "createdAt" | "lastSaleAt" | "lastPayoutAt" | "lastActivityAt" | "balance";
-const SORT_KEYS: SortKey[] = ["name", "createdAt", "lastSaleAt", "lastPayoutAt", "lastActivityAt", "balance"];
+type SortKey = "number" | "name" | "createdAt" | "lastSaleAt" | "lastPayoutAt" | "lastActivityAt" | "balance";
+const SORT_KEYS: SortKey[] = ["number", "name", "createdAt", "lastSaleAt", "lastPayoutAt", "lastActivityAt", "balance"];
 const DATE_SORTS: SortKey[] = ["lastSaleAt", "lastPayoutAt", "lastActivityAt"];
 const PAGE_SIZE = 50;
 // Dates and balances read most usefully newest/largest first; names A→Z.
 const DEFAULT_DESC: Record<SortKey, boolean> = {
+  number: false,
   name: false,
   createdAt: true,
   lastSaleAt: true,
@@ -122,12 +128,16 @@ function AccountList() {
       (a) =>
         (!q ||
           a.name.toLowerCase().includes(q) ||
+          // An all-digit query is also an account-number prefix ("45" → 4545, 4501, …).
+          (/^\d+$/.test(q) && String(a.accountNumber ?? "").startsWith(q)) ||
           (a.email ?? "").toLowerCase().includes(q) ||
           (digits.length >= 3 && (a.phone ?? "").replace(/\D/g, "").includes(digits))) &&
         (idleCutoff == null || !a.lastActivityAt || new Date(a.lastActivityAt).getTime() < idleCutoff)
     );
     const value = (a: AccountRow): string | number => {
       switch (sortKey) {
+        case "number":
+          return a.accountNumber ?? -1;
         case "name":
           return a.name.toLowerCase();
         case "createdAt":
@@ -169,7 +179,7 @@ function AccountList() {
   const canCreate = user ? CAN_CREATE_ROLES.includes(user.activeRole) : false;
   const canBulkEdit = canCreate; // same roles as the account page's Inactive checkbox
   const showsBalance = tab !== "DONOR" && tab !== "STORE";
-  const columnCount = (showsBalance ? 6 : 4) + (selecting ? 1 : 0);
+  const columnCount = (showsBalance ? 7 : 5) + (selecting ? 1 : 0);
 
   // ---- selection ----
   const selectable = (a: AccountRow) => a.accountType !== "STORE"; // built-in store account is always active
@@ -311,7 +321,7 @@ function AccountList() {
           type="search"
           value={query}
           onChange={(e) => setParam({ q: e.target.value })}
-          placeholder="Search by name, email, or phone…"
+          placeholder="Search by name, account #, email, or phone…"
           aria-label="Search accounts"
           className="w-full max-w-md border border-ink p-2 bg-white"
         />
@@ -407,6 +417,7 @@ function AccountList() {
                     />
                   </th>
                 )}
+                {sortHeader("number", "Account #")}
                 {sortHeader("name", "Name")}
                 {sortHeader("createdAt", "Created")}
                 {sortHeader("lastSaleAt", "Latest Sale")}
@@ -434,6 +445,11 @@ function AccountList() {
                       />
                     </td>
                   )}
+                  <td className="p-3">
+                    <Link to={`/accounts/${a.id}`} className="hover:text-crimson hover:underline">
+                      {a.accountNumber ?? "—"}
+                    </Link>
+                  </td>
                   <td className="p-3 font-bold">
                     <Link to={`/accounts/${a.id}`} className="hover:text-crimson hover:underline">
                       {a.name}
@@ -560,7 +576,7 @@ function AccountDetail({ id }: { id: string }) {
       <BackToAccounts />
       <div className="flex justify-between items-start mt-4 mb-6">
         <div>
-          <h2 className="text-2xl font-bold">{account.name}</h2>
+          <h2 className="text-2xl font-bold">{accountLabel(account)}</h2>
           <div className="flex gap-2 items-center">
             <Badge>{account.accountType}</Badge>
             {account.isStoreAccount && <Badge tone="warning">Store account</Badge>}
@@ -632,12 +648,73 @@ function AccountDetail({ id }: { id: string }) {
         </div>
       </Card>
 
+      <AccountReports account={account} />
+
       {(showsBalance || account.payoutCount > 0) && (
         <AccountPayouts accountId={id} payoutCount={account.payoutCount} version={version} />
       )}
 
       <AccountItems accountId={id} itemCount={account.itemCount} version={version} />
     </div>
+  );
+}
+
+// Printable proof for the consignor at the counter: the itemized payout statement (for
+// the Payout History's date range, if one is set) and the items still on the floor. Both
+// are PDFs built from the same endpoints as Reports > Payouts / Active Items, which
+// Managers+ can also open from here.
+function AccountReports({ account }: { account: AccountDetailData }) {
+  const { user } = useAuth();
+  const [params] = useSearchParams();
+  const from = params.get("pfrom") ?? "";
+  const to = params.get("pto") ?? "";
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const canSeeReports = !!user && REPORT_ROLES.includes(user.activeRole);
+  async function run(key: string, f: () => Promise<void>) {
+    setBusy(key);
+    setError(null);
+    try {
+      await f();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Couldn't build the PDF");
+    } finally {
+      setBusy(null);
+    }
+  }
+  return (
+    <Card className="mb-6 flex flex-wrap items-center gap-3">
+      <span className="text-xs uppercase font-bold mr-2">Print for consignor</span>
+      {account.payoutCount > 0 && (
+        <Button
+          variant="secondary"
+          disabled={busy != null}
+          onClick={() => run("statement", () => downloadPayoutStatement(account.id, from || undefined, to || undefined))}
+        >
+          {busy === "statement" ? "Building…" : from || to ? "Payout Statement PDF (date range below)" : "Payout Statement PDF"}
+        </Button>
+      )}
+      <Button
+        variant="secondary"
+        disabled={busy != null}
+        onClick={() => run("active", () => downloadActiveItems({ accountId: account.id }))}
+      >
+        {busy === "active" ? "Building…" : "Active Items PDF"}
+      </Button>
+      {canSeeReports && (
+        <span className="text-xs text-gray-500 ml-auto">
+          Open in Reports:{" "}
+          <Link to={`/reports?tab=payouts&poa=${account.id}&pov=statement`} className="text-crimson font-bold hover:underline">
+            Payouts
+          </Link>{" "}
+          ·{" "}
+          <Link to={`/reports?tab=active&aia=${account.id}`} className="text-crimson font-bold hover:underline">
+            Active Items
+          </Link>
+        </span>
+      )}
+      {error && <span className="text-crimson text-xs w-full">{error}</span>}
+    </Card>
   );
 }
 
@@ -663,13 +740,22 @@ interface PayoutDetailData {
   status: string;
   createdAt: string;
   paidAt: string | null;
-  account: { id: string; name: string; accountType: string };
+  account: { id: string; accountNumber: number | null; name: string; accountType: string };
   lines: {
     id: string;
     lineType: string;
     description: string | null;
     amount: number;
-    item: { id: string; sku: string; description: string; category: string; size: string | null; price: number } | null;
+    item: {
+      id: string;
+      sku: string;
+      tagAccountNumber: number | null;
+      accountItemNumber: number | null;
+      description: string;
+      category: string;
+      size: string | null;
+      price: number;
+    } | null;
     sale: { id: string; saleDate: string; salePrice: number } | null;
   }[];
 }
@@ -685,6 +771,7 @@ const LINE_TYPE_LABELS: Record<string, string> = {
 };
 
 function PayoutDetail({ accountId, payoutId }: { accountId: string; payoutId: string }) {
+  const { user } = useAuth();
   const [payout, setPayout] = useState<PayoutDetailData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -708,13 +795,23 @@ function PayoutDetail({ accountId, payoutId }: { accountId: string; payoutId: st
         <div className="text-xs uppercase text-gray-500">
           Payout to{" "}
           <Link to={`/accounts/${payout.account.id}`} className="font-bold text-ink hover:text-crimson hover:underline">
-            {payout.account.name}
+            {accountLabel(payout.account)}
           </Link>
         </div>
-        <h2 className="text-2xl font-bold">
-          Payout #{payout.payoutNumber}
-          <span className="ml-3 text-base font-normal text-gray-500">{formatDate(payout.paidAt ?? payout.createdAt)}</span>
-        </h2>
+        <div className="flex justify-between items-end gap-4">
+          <h2 className="text-2xl font-bold">
+            Payout #{payout.payoutNumber}
+            <span className="ml-3 text-base font-normal text-gray-500">{formatDate(payout.paidAt ?? payout.createdAt)}</span>
+          </h2>
+          <Button
+            variant="secondary"
+            onClick={() =>
+              downloadSinglePayout(user?.storeName ?? "Teabox", payout.account, payout as unknown as StatementPayout)
+            }
+          >
+            Download PDF
+          </Button>
+        </div>
       </div>
 
       <Card className="mb-6 flex flex-wrap gap-10">
@@ -755,10 +852,10 @@ function PayoutDetail({ accountId, payoutId }: { accountId: string; payoutId: st
               <tbody>
                 {payout.lines.map((l) => (
                   <tr key={l.id} className="border-b border-gray-100 hover:bg-bone/50">
-                    <td className="p-3 font-mono text-xs">
+                    <td className="p-3 text-xs">
                       {l.item ? (
                         <Link to={`/inventory/${l.item.id}`} className="hover:text-crimson hover:underline">
-                          {l.item.sku}
+                          {itemNo(l.item)}
                         </Link>
                       ) : (
                         "—"

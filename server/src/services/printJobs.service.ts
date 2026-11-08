@@ -1,6 +1,7 @@
 import type { Item } from "@prisma/client";
 import { printTagBatch } from "../adapters/printer";
 import { recordAuditMany } from "../lib/audit";
+import { formatTagNumber } from "../lib/barcode";
 import type { SessionClaims } from "../lib/jwt";
 import { prisma } from "../lib/prisma";
 
@@ -19,6 +20,7 @@ export async function printItemsAsJob(
 ) {
   const tickets = items.map((item) => ({
     sku: item.sku,
+    tagNumber: formatTagNumber(item) ?? undefined,
     description: item.description,
     price: item.price,
     category: item.category,
@@ -41,6 +43,7 @@ export async function printItemsAsJob(
           position,
           itemId: item.id,
           sku: item.sku,
+          tagNumber: formatTagNumber(item),
           description: item.description,
           price: item.price,
           category: item.category,

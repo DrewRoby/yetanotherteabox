@@ -18,15 +18,22 @@ function getSqlLoginConfig(): sql.config {
       throw new Error(`Missing required env var ${key} — copy .env.example to .env first.`);
     }
   }
+  // "HOST\INSTANCE" (e.g. the shop's DESKTOP-ALTQTAR\LIBERTY) is a named instance:
+  // tedious finds its port through the SQL Server Browser service, and port and
+  // instanceName are mutually exclusive — so a port is only sent when set explicitly
+  // (a fixed-port instance), or for a plain host (default 1433).
+  const [server, instanceName] = process.env.MSSQL_HOST!.split("\\");
+  const port = process.env.MSSQL_PORT ? Number(process.env.MSSQL_PORT) : instanceName ? undefined : 1433;
   return {
-    server: process.env.MSSQL_HOST!,
-    port: Number(process.env.MSSQL_PORT ?? 1433),
+    server,
+    ...(port ? { port } : {}),
     user: process.env.MSSQL_USER!,
     password: process.env.MSSQL_PASSWORD!,
     database: process.env.MSSQL_DATABASE!,
     options: {
       encrypt: process.env.MSSQL_ENCRYPT === "true",
       trustServerCertificate: true,
+      ...(instanceName && !port ? { instanceName } : {}),
     },
   };
 }

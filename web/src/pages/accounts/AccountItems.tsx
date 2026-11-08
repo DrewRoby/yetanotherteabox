@@ -4,6 +4,7 @@ import { api, ApiError } from "../../api/client";
 import { Badge, Button } from "../../components/Card";
 import { formatDate, localDayStartMs, money } from "./format";
 import { Pager, rangeLabel } from "../../components/Pager";
+import { itemNo } from "../../lib/itemNumber";
 
 // The account detail page's Items table. Filtering, sorting and paging all happen
 // server-side (GET /accounts/:id/items) — an account can own ~340k items. Every
@@ -28,6 +29,8 @@ const PAGE_SIZE = 50;
 interface ItemRow {
   id: string;
   sku: string;
+  tagAccountNumber: number | null;
+  accountItemNumber: number | null;
   description: string;
   status: string;
   price: number;
@@ -146,7 +149,7 @@ export function AccountItems({
             type="search"
             value={get("q")}
             onChange={(e) => update({ q: e.target.value })}
-            placeholder="SKU or description…"
+            placeholder="Item # (4545-12), SKU or description…"
             aria-label="Search items"
             className={`${field} w-full`}
           />
@@ -228,7 +231,7 @@ export function AccountItems({
           <table className={`w-full text-sm ${loading ? "opacity-60" : ""}`}>
             <thead>
               <tr>
-                {header("sku", "SKU")}
+                {header("sku", "Item #")}
                 {header("description", "Description")}
                 {header("status", "Status")}
                 {header("price", "Price", "right")}
@@ -240,9 +243,9 @@ export function AccountItems({
             <tbody>
               {data?.items.map((i) => (
                 <tr key={i.id} className="border-b border-gray-100 hover:bg-bone/50">
-                  <td className="p-2 font-mono text-xs whitespace-nowrap">
-                    <Link to={`/inventory/${i.id}`} className="hover:text-crimson hover:underline">
-                      {i.sku}
+                  <td className="p-2 text-xs whitespace-nowrap">
+                    <Link to={`/inventory/${i.id}`} className="hover:text-crimson hover:underline" title={`SKU ${i.sku}`}>
+                      {itemNo(i)}
                     </Link>
                   </td>
                   <td className="p-2">{i.description}</td>

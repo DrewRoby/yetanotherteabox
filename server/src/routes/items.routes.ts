@@ -9,6 +9,7 @@ import { IntakeAccountError, nextItemIdentity, resolveIntakeAccountId } from "..
 import { itemListQuerySchema, listCategories, listItems } from "../services/itemList.service";
 import { loadPrintableItems, printItemsAsJob } from "../services/printJobs.service";
 import { suggestMetadata } from "../adapters/cv";
+import { parseTagNumber } from "../lib/barcode";
 
 export const itemsRouter = Router();
 itemsRouter.use(authenticate);
@@ -23,13 +24,13 @@ itemsRouter.get("/", requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER", "EMPLOYEE")
       ...(category ? { category: String(category) } : {}),
       ...(accountId ? { accountId: String(accountId) } : {}),
       ...(q
-        ? {
+        ? (parseTagNumber(String(q)) ?? {
             OR: [
               { description: { contains: String(q) } },
               { brand: { contains: String(q) } },
               { sku: { contains: String(q) } },
             ],
-          }
+          })
         : {}),
     },
     include: { account: { select: { id: true, name: true, accountType: true } } },
@@ -120,11 +121,13 @@ itemsRouter.post("/", async (req, res) => {
   // nextItemIdentity in items.service.ts).
   const storeId = req.session!.storeId;
   const item = await prisma.$transaction(async (tx) => {
-    const { itemNumber, sku } = await nextItemIdentity(tx, storeId);
+    const { itemNumber, sku, tagAccountNumber, accountItemNumber } = await nextItemIdentity(tx, storeId, accountId);
     return tx.item.create({
       data: {
         sku,
         itemNumber,
+        tagAccountNumber,
+        accountItemNumber,
         description: parsed.data.description,
         category: parsed.data.category,
         subcategory: parsed.data.subcategory,

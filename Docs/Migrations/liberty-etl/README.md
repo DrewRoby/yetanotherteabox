@@ -25,11 +25,18 @@ briefly gapless 1..N before that). Later the same weekend the migration also gai
 from `store.yaml` `items:` (HT, from 2,000,000), `Account.isActive` from `INACTIVE_TS`,
 backfilled `Item.soldAt`/`paidOutAt`, and (2026-10-11) the type-3 accounts below.
 
-**Since 2026-10-11 `dist-bin/teabox.db` holds real data entered through the app** (the
-first `HT-` items, account flags set by staff). Schema changes since then were applied
-**in place** (`prisma migrate deploy` + targeted updates, each preceded by a copy into
-`dist-bin/arch/`) — re-running `migrate` into it would now destroy that work. Treat a
-full re-migration as a deliberate, user-approved reset, not a routine step.
+**Teabox is still in development, not production** (see root `CLAUDE.md`'s "Project
+status"): the shop runs on Liberty, so re-running `migrate` into a fresh
+`dist-bin/teabox.db` is a normal way to pick up a newer backup. Archive the old file
+into `dist-bin/arch/` first and carry over anything staff set up in the app that's
+worth keeping. **2026-11-07 re-run** from the 2026-11-04 backup: 3,654 accounts,
+885,705 items, 860,613 sales, 55,367 payouts, 568,118 payout lines, 6 logins, about
+13 minutes. The 2,264 accounts staff had deactivated and the 5 employees' sign-in
+badges (`User.badgeCodeHash`/`badgeIssuedAt`, by email) were copied over from the
+previous DB. Accounts were matched by `legacyId`, or by name + `createdAt` if there
+was none. Between 2026-10-11 and 10-13 schema changes were instead applied in place
+(`prisma migrate deploy` plus the `repair-ledger`/`backfill-transactions` scripts
+below). That still works when a re-run isn't wanted.
 
 - **The `CLIENT_TYPE_ID = 3` ("Store Account") accounts** (~46 rows, at least 3
   different real meanings mixed under one type code) are **migrated as `CONSIGNOR`
@@ -246,6 +253,47 @@ that's already there. Prints a summary of what was created/updated/unchanged, an
 warns (without failing) about any account-scoped entry whose `account:` name didn't
 match an existing `Account`.
 
+## 4. Catching up with a live Liberty — `scripts/sync.ts`
+
+Between the snapshot Teabox was migrated from and cutover, the shop keeps using
+Liberty. `sync` reconciles a Teabox database with any Liberty RWD database: the shop's
+live SQL Server Express, or a fresh backup restored locally (same schema either way).
+It is one-way and idempotent: a re-run with nothing new changes nothing. It never
+writes to Liberty. Rules and the reasoning are in `../../sync-design.md`.
+
+1. Copy `config/liberty-source.example.env` → `config/liberty-source.env`
+   (git-ignored) and fill it in. The example lists what the backup's metadata says
+   about the shop's server (`DESKTOP-ALTQTAR\LIBERTY`, logins `report`/`appl`/`sa`)
+   and the network prerequisites for a named instance.
+2. `npm run sync -- --source config/liberty-source.env --check` connects and shows
+   how far Teabox is behind (Liberty's latest sale/intake/payout vs Teabox's).
+3. Stop `teabox.exe` and back up the target (`dist-bin/arch/`).
+4. `npm run sync -- --source config/liberty-source.env --dry-run` writes the full
+   plan to `reports/sync-<time>-dry.md` (git-ignored: it names customers).
+5. `npm run sync -- --source config/liberty-source.env` applies it in one SQLite
+   transaction, records a `SyncRun` row, and writes `reports/sync-<time>.md`.
+6. `TEABOX_DATABASE_URL=… npm run validate`.
+
+It covers accounts (new clients; contact changes), items (new; field changes;
+off-floor status changes), sales (new; marks items sold), payouts (new, with
+itemization; status/amount/method changes) and balances (recomputed: Liberty unpaid +
+Teabox-native credits − Teabox-native payouts). **Conflicts are reported, not
+overwritten**:
+- **Item changed in both:** Teabox edited, repriced or audited an item that Liberty
+  also changed. Teabox's version is kept.
+- **Sold in both:** an item was sold in Teabox and in Liberty. Liberty's sale isn't
+  recorded.
+- **Payout number taken:** a Teabox-made payout already has the number of a new
+  Liberty payout. The Teabox payout is renumbered.
+- **Sale gone from Liberty:** Teabox has a Liberty sale that Liberty no longer has.
+
+The first run against a database migrated before 0.2.0 also adopts migrated payouts
+(`Payout.legacyId`, by number + account + amount) and the 158 accounts `repair-ledger`
+couldn't link (by name + created date). That's a one-time step, about 1 minute.
+Verified 2026-10-13 against a scratch copy rolled back one day with four planted
+conflicts: it restored 15 items, 73 sales and 6 payouts (123 lines), reported all four
+conflicts, and a second run changed nothing.
+
 ## Layout
 
 - `config/` — `store.yaml` (shop identity + role/login mapping, see above) and its
@@ -253,6 +301,7 @@ match an existing `Account`.
 - `extract/` — typed readers against the restored SQL Server DB (`liberty.ts`) and
   the connection pool (`db.ts`).
 - `transform/` — pure mapping functions, one module per Teabox entity, plus
+  `lookups.ts` (the lookup maps they need, shared by `migrate` and `sync`) and
   `crosswalks.ts` (the enum crosswalks — keep in sync with spec §3.1's tables).
 - `load/` — `prisma.ts` (imports server's generated client directly), `batch.ts`
   (chunked `createMany` helper, needed at this row count), and `users.ts`
@@ -261,7 +310,9 @@ match an existing `Account`.
 - `scripts/` — `profile.ts` (Phase 1), `migrate.ts` (Phase 2 orchestrator — Accounts/
   Items/Sales/Payouts/Users, config-driven, one-time only), `add-users.ts`
   (repeatable bulk-add/update of logins against an already-migrated store, see above),
-  `validate.ts` (post-load invariant checks), `create-test-login.ts` (superseded by
+  `validate.ts` (post-load invariant checks), `sync.ts` (catch-up reconcile with a live
+  Liberty, see §4), `repair-ledger.ts` / `backfill-transactions.ts` (one-off in-place
+  fixes of the first load), `create-test-login.ts` (superseded by
   config-driven users; kept only for a quick extra scratch-DB smoke-test login).
 - `reports/` — `profile.md`/`.json` (source profiling output) and
   `client_type_3_review.md` (the list waiting on the shop owner).

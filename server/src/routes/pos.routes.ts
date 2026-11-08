@@ -5,19 +5,22 @@ import { prisma } from "../lib/prisma";
 import { authenticate } from "../middleware/auth";
 import { requireRole } from "../middleware/requireRole";
 import { recordAudit } from "../lib/audit";
+import { parseTagNumber } from "../lib/barcode";
 import { consignorShareOf, isBalanceBearing } from "../services/accounts.service";
 
 export const posRouter = Router();
 posRouter.use(authenticate, requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER", "EMPLOYEE", "REGISTER"));
 
-// Exact-match lookup for the scan/SKU field.
+// Exact-match lookup for the scan/SKU field: a scanned barcode (the sku) or a typed tag
+// number ("4545-12").
 posRouter.get("/lookup", async (req, res) => {
-  const code = String(req.query.code || "");
+  const code = String(req.query.code || "").trim();
+  const tag = parseTagNumber(code);
   const item = await prisma.item.findFirst({
-    where: { storeId: req.session!.storeId, sku: code, status: "AVAILABLE" },
+    where: { storeId: req.session!.storeId, status: "AVAILABLE", ...(tag ?? { sku: code }) },
     include: { account: { select: { name: true } } },
   });
-  if (!item) return res.status(404).json({ error: "No available item with that SKU" });
+  if (!item) return res.status(404).json({ error: "No available item with that tag number or SKU" });
   res.json(item);
 });
 
@@ -34,13 +37,13 @@ posRouter.get("/inventory-search", async (req, res) => {
     ...(size ? { size: String(size) } : {}),
     ...(brand ? { brand: { contains: String(brand) } } : {}),
     ...(q
-      ? {
+      ? (parseTagNumber(String(q)) ?? {
           OR: [
             { description: { contains: String(q) } },
             { brand: { contains: String(q) } },
             { category: { contains: String(q) } },
           ],
-        }
+        })
       : {}),
   };
   const [results, total] = await Promise.all([

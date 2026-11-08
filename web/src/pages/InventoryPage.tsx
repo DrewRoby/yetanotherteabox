@@ -4,6 +4,7 @@ import { api, ApiError } from "../api/client";
 import { Badge, Button } from "../components/Card";
 import { Pager, rangeLabel } from "../components/Pager";
 import { formatDate, localDayStartMs, money } from "./accounts/format";
+import { itemNo } from "../lib/itemNumber";
 
 // The whole store's inventory (~900k items for a migrated shop), filtered, sorted and
 // paged server-side by GET /items/browse (server/src/services/itemList.service.ts —
@@ -13,6 +14,8 @@ import { formatDate, localDayStartMs, money } from "./accounts/format";
 interface ItemRow {
   id: string;
   sku: string;
+  tagAccountNumber: number | null;
+  accountItemNumber: number | null;
   description: string;
   category: string;
   status: string;
@@ -164,7 +167,7 @@ export function InventoryPage() {
               type="search"
               value={get("q")}
               onChange={(e) => update({ q: e.target.value })}
-              placeholder="Search by SKU, description, brand..."
+              placeholder="Search by item # (4545-12), SKU, description, brand..."
               aria-label="Search inventory"
               className={`${field} w-72`}
             />
@@ -239,7 +242,7 @@ export function InventoryPage() {
           <table className={`w-full text-sm ${loading ? "opacity-60" : ""}`}>
             <thead>
               <tr>
-                {header("sku", "SKU")}
+                {header("sku", "Item #")}
                 {header("description", "Description")}
                 {header("category", "Category")}
                 {header("account", "Account")}
@@ -253,9 +256,9 @@ export function InventoryPage() {
             <tbody>
               {data?.items.map((item) => (
                 <tr key={item.id} className="border-b border-gray-100 hover:bg-bone/50">
-                  <td className="p-3 font-mono text-xs whitespace-nowrap">
-                    <Link to={`/inventory/${item.id}`} className="text-crimson font-bold hover:underline">
-                      {item.sku}
+                  <td className="p-3 text-sm whitespace-nowrap">
+                    <Link to={`/inventory/${item.id}`} className="text-crimson font-bold hover:underline" title={`SKU ${item.sku}`}>
+                      {itemNo(item)}
                     </Link>
                   </td>
                   <td className="p-3 font-bold">

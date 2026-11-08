@@ -1,5 +1,5 @@
-<!-- migration-spec-freshness: schema.prisma=d4584354 enums.ts=3fd31e7e -->
-# Teabox ERP — Data Model Migration Spec (SQL Server source)
+<!-- migration-spec-freshness: schema.prisma=92d4c4da enums.ts=3fd31e7e -->
+# Teabox Consignment — Data Model Migration Spec (SQL Server source)
 
 Status: **living document**. Update this file whenever the Prisma schema
 (`server/prisma/schema.prisma`), the enum source of truth (`server/src/lib/enums.ts`),
@@ -354,7 +354,10 @@ Treasures every `N` payout has `PAYMENT_ACT_ID = 1` (Check) and a check number, 
 request (the first load mapped it to `REQUESTED`; fixed by `repair-ledger`). Whether any
 of those checks went uncashed isn't in Liberty. `PAYMENT_ACT_ID` → `Payout.method`
 (1 → `CHECK`, 2 → `CASH`) and `CHECK_NUM` → `Payout.checkNumber` (checks only), as
-well as `Account.paymentMethod` per above.
+well as `Account.paymentMethod` per above. `Payout.legacyId = "liberty:" + PAYOUT_ID`
+marks the row's origin, which the catch-up sync relies on (`liberty-etl` `npm run sync`,
+README §4). A payout made in Teabox has none, and keeps its own number unless a new
+Liberty payout needs it.
 
 ### `SALE_HDR`/`SALE_DETAIL`/`SALE_PAY_DTL` → `Sale`
 
@@ -432,6 +435,8 @@ One `Store` row per physical location (§2).
 | `splitPercent` | `Int?` | 0–100 (`z.number().min(0).max(100)`, app-layer only) | **Direction matters**: this is the payee's (consignor/vendor/booth owner's) share, credited to their balance on sale — e.g. `splitPercent: 60` means the consignor keeps 60% and the store keeps 40%. Many legacy systems store the *store's* cut instead ("commission rate"). **Confirm the direction explicitly per source system before loading** — an inverted split silently pays consignors the store's share and vice versa, and nothing in the app catches this (see `pos.routes.ts:112-119`: `consignorShare = salePrice * splitPercent / 100`). Leave `null` only for `DONOR`/`STORE` accounts, which never use it. |
 | `currentBalance` | `Float` | default 0; **stripped from API response entirely** for `DONOR`/`STORE` accounts (`serializeAccount()`, `server/src/services/accounts.service.ts`) | This must equal, at cutover: `SUM(credited sale shares since last payout) − SUM(paid payouts not yet reflected)`, i.e. the *currently owed, unpaid* balance — not lifetime earnings. See §5 for the reconciliation formula and §6 for the float-precision caveat. Must be `0` for every `DONOR` and `STORE` account (the app never writes to these accounts' balances — `pos.routes.ts` only credits `BALANCE_BEARING_ACCOUNT_TYPES`). |
 | `isActive` | `Boolean` | default `true` | `false` = dormant: hidden from default lists/pickers, excluded from payout-obligation totals, no new intake; balance kept. **Liberty** has no flag, only `CLIENT.ACTIVE_TS`/`INACTIVE_TS`: inactive = an `INACTIVE_TS` not followed by a later `ACTIVE_TS`. Barely used at Hidden Treasures — 1 migrated client (`CLIENT_ID 101847`) qualifies — so dormancy there is better judged by activity (no intake/sale/payout in N years) than by Liberty's data. |
+| `accountNumber` | `Int?` | unique per `storeId` | The number staff know the account by. **Liberty: `CLIENT.ACCOUNT`** (e.g. 4545 — *not* `CLIENT_ID`, 103258). New accounts continue the first run of numbers with no gap over 100 (Hidden Treasures: 0–4545; Liberty reserves 5000, 7000, 30062, 60001, 800xx store buckets, 999997 "Purged Account", 999999 "Cash Sales"). Set by `liberty-etl`'s `load/numbers.ts`. |
+| `nextItemNumber` | `Int` | default `1` | The account's next item sequence for tag numbers. **Liberty: `CLIENT.NEXT_ITEM_NUM`** (raised past any number in use). |
 | `lastSaleAt` | `DateTime?` | | Denormalized `MAX(Sale.saleDate)` over the account's items (the Accounts list's "Latest Sale" column). The live app stamps it at POS checkout; a migration that inserts `Sale` rows directly must set it afterward — the `20261010221750` schema migration's backfill `UPDATE` does exactly that and can be re-run as-is. |
 | `createdAt` / `updatedAt` | `DateTime` | | |
 
@@ -492,6 +497,7 @@ Settings → Users & Permissions (`DELETE /settings/users/roles/:userRoleId`).
 | `sku` | `String` | **unique**, required | Also the value encoded onto the printed barcode tag (`web/src/components/Barcode.tsx`) and matched on POS scan lookup. If the source system's SKU/tag numbers are themselves unique per shop, reuse them verbatim (better for staff continuity — physical tags already printed with old SKUs stay valid). If the source allows SKU reuse across time (e.g. recycled tag numbers) or the format collides with Teabox's own generator (`formatBarcode()`, `server/src/lib/barcode.ts` — `${Store.itemPrefix}-${itemNumber}`), namespace migrated SKUs distinctly (e.g. a prefix) so they're recognizable. |
 | `soldAt` / `paidOutAt` | `DateTime?` | | Denormalized: latest `Sale.saleDate`, and latest date of a non-`REJECTED` `Payout` with a line for the item. They drive Inventory sorting/filtering. The live app stamps them; a migration inserting `Sale`/`PayoutLine` rows directly must backfill both afterward with the `add_item_sold_paid_dates` schema migration's `UPDATE`s (re-runnable as-is). Validated by `liberty-etl`'s `npm run validate`. |
 | `itemNumber` | `Int` | **required**, unique per `storeId` (`@@unique([storeId, itemNumber])`) | **Must equal the number encoded in the item's `sku`** (Liberty: `itemNumber = ITEM_ID` for `LIB-<ITEM_ID>`). New items take one past the store's highest `itemNumber` (floor `Store.itemStartNumber`), and that's only collision-free if every existing SKU encodes its own number. Not required to be gapless. (Before 2026-10-11 it had to be gapless 1..N, because intake used `count + 1`.) |
+| `tagAccountNumber` / `accountItemNumber` | `Int?` / `Int?` | indexed with `storeId`, **not** unique | The item number staff read off the tag, shown as `<tagAccountNumber>-<accountItemNumber>` ("4545-12"). **Liberty: `CLIENT.ACCOUNT` + `ITEM.ITEM_NUM`** (item numbers are per account). Account = the `CLIENT_ITEM` owner; for store-owned items (no `CLIENT_ITEM`) the one client their `CLIENT_TRANS` rows credit (~178k of ~340k — their `ITEM_NUM` always fits under that client's `NEXT_ITEM_NUM`); neither → null (~162k, UI shows the SKU). Fixed once assigned — not changed when the item changes owner. Liberty itself numbered 164 old (2005–07) store-owned items twice, hence no unique index. |
 | `description` | `String` | required | |
 | `category` | `String` | required, free text (no enum) | No longer feeds SKU generation (that now comes from `itemNumber`, not `category`); purely descriptive/filterable metadata. |
 | `subcategory`, `brand`, `style`, `pattern`, `size`, `serialNumber`, `condition` | `String?` | all optional free text | Direct 1:1 mapping from whatever equivalent columns the source has; leave `null` rather than empty string for anything absent (the intake `zod` schema treats these as `optional()`, not empty-string-required). |

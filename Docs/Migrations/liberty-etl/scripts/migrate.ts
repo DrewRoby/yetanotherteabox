@@ -30,15 +30,18 @@ import {
   fetchPrimarySalePaymentTypes,
   fetchPayouts,
   fetchPayoutLines,
+  fetchLedgerClientOfStoreItems,
 } from "../extract/liberty";
 import { closePool } from "../extract/db";
-import { transformClientToAccount, AccountLookups } from "../transform/account";
-import { transformItem, ItemLookups } from "../transform/item";
+import { transformClientToAccount } from "../transform/account";
+import { transformItem } from "../transform/item";
+import { buildAccountLookups, buildItemLookups } from "../transform/lookups";
 import { transformSaleDetail } from "../transform/sale";
 import { transformPayout, transformPayoutLine } from "../transform/payout";
 import { prisma } from "../load/prisma";
 import { createManyChunked } from "../load/batch";
 import { applyUsersAndRoles } from "../load/users";
+import { assignLibertyNumbers } from "../load/numbers";
 
 // The next "round" number strictly above n, rounding up at the leading digit:
 // 13059 -> 20000, 1162674 -> 2000000, 999 -> 1000. Used for items.startNumber: auto,
@@ -88,6 +91,7 @@ async function main() {
     salePaymentTypes,
     payouts,
     payoutLines,
+    ledgerClients,
   ] = await Promise.all([
     fetchStore(),
     fetchOrdinaryClients(),
@@ -107,6 +111,7 @@ async function main() {
     fetchPrimarySalePaymentTypes(),
     fetchPayouts(),
     fetchPayoutLines(),
+    fetchLedgerClientOfStoreItems(),
   ]);
   await closePool();
   console.log(
@@ -147,14 +152,7 @@ async function main() {
   console.log(`Created Store + STORE account.`);
 
   // ---- Accounts (ordinary clients only — see file header) ----
-  const accountLookups: AccountLookups = {
-    addressByClientId: new Map(addresses.map((a) => [a.CLIENT_ID, a])),
-    phoneByClientId: new Map(phones.map((p) => [p.CLIENT_ID, p.PHONE_NUMBER])),
-    emailByClientId: new Map(emails.map((e) => [e.CLIENT_ID, e.EMAIL_ADDR])),
-    storePctByPriceCodeId: new Map(priceCodes.map((p) => [p.PRICE_CODE_ID, p.STORE_PCT])),
-    paymentActNameById: new Map(paymentActs.map((p) => [p.PAYMENT_ACT_ID, p.BANK_NAME])),
-    balanceByClientId: new Map(balances.map((b) => [b.CLIENT_ID, b.balance])),
-  };
+  const accountLookups = buildAccountLookups({ addresses, phones, emails, priceCodes, paymentActs, balances });
 
   const accountIdByClientId = new Map<number, string>();
   const accountRows = clients.map((client) => {
@@ -182,16 +180,7 @@ async function main() {
   console.log(`Created ${accountRows.length} Account rows.`);
 
   // ---- Items ----
-  const itemLookups: ItemLookups = {
-    itemStatusDescById: new Map(itemStatuses.map((s) => [s.STATUS_ID, s.STATUS_DESC])),
-    categoryByCategoryListId: new Map(
-      categoryList.map((c) => [c.CATEGORY_LIST_ID, { category: c.CAT_L1_NAME, subcategory: c.CAT_L3_NAME }])
-    ),
-    categoryNameById: new Map(categories.map((c) => [c.CATEGORY_ID, c.CATEGORY_NAME])),
-    brandByItemId: new Map(brandSizeAttrs.filter((a) => a.ATTR_TYPE_DESC.includes("Brand") && a.ATTR_TYPE_VALUE).map((a) => [a.ITEM_ID, a.ATTR_TYPE_VALUE!])),
-    sizeByItemId: new Map(brandSizeAttrs.filter((a) => a.ATTR_TYPE_DESC.includes("Size") && a.ATTR_TYPE_VALUE).map((a) => [a.ITEM_ID, a.ATTR_TYPE_VALUE!])),
-    ownerClientIdByItemId: new Map(clientItemLinks.map((l) => [l.ITEM_ID, l.CLIENT_ID])),
-  };
+  const itemLookups = buildItemLookups({ itemStatuses, categoryList, categories, brandSizeAttrs, clientItemLinks });
 
   const itemIdByLibertyItemId = new Map<number, string>();
   const itemRows: any[] = [];
@@ -241,6 +230,17 @@ async function main() {
   }
   await createManyChunked((data) => prisma.item.createMany({ data }), itemRows, 2000, "items");
   console.log(`Created ${itemRows.length} Item rows (${skippedForExcludedOwner} skipped — owned by an excluded account).`);
+
+  // ---- Account numbers + item tag numbers ("<ACCOUNT>-<ITEM_NUM>") — see load/numbers.ts ----
+  const { nativeAccountsMoved: _moved, ...numbering } = await assignLibertyNumbers(prisma, {
+    storeId,
+    clients,
+    libItems: items,
+    ownerClientIdByItemId: itemLookups.ownerClientIdByItemId,
+    ledgerClientIdByItemId: new Map(ledgerClients.map((l) => [l.ITEM_ID, l.CLIENT_ID])),
+    dryRun: false,
+  });
+  console.log(`Numbered accounts and tags: ${JSON.stringify(numbering)}`);
 
   // ---- Sales ----
   const paymentTypeIdBySaleId = new Map(salePaymentTypes.map((p) => [p.SALE_ID, p.PAYMENT_TYPE_ID]));
@@ -314,6 +314,7 @@ async function main() {
       paidAt: t.paidAt,
       method: t.method,
       checkNumber: t.checkNumber,
+      legacyId: `liberty:${payout.PAYOUT_ID}`,
     });
   }
   await createManyChunked((data) => prisma.payout.createMany({ data }), payoutRows, 2000, "payouts");

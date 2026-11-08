@@ -1,8 +1,12 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import pkg from "./package.json";
 
 export default defineConfig({
   plugins: [react()],
+  // Shown in the sidebar footer so a bug report can say which build it came from. Bump
+  // server/, web/ and liberty-etl's package.json together (see RELEASE_NOTES.md).
+  define: { __APP_VERSION__: JSON.stringify(pkg.version) },
   server: {
     port: 5173,
     proxy: {

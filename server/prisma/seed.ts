@@ -16,13 +16,14 @@ async function main() {
   });
 
   const storeAccount = await prisma.account.create({
-    data: { storeId: store.id, accountType: "STORE", name: "Store-Owned Inventory" },
+    data: { storeId: store.id, accountNumber: 1, accountType: "STORE", name: "Store-Owned Inventory" },
   });
 
   const consignorAccount = await prisma.account.create({
     data: {
       storeId: store.id,
       accountType: "CONSIGNOR",
+      accountNumber: 2,
       name: "Jane Doe",
       email: "jane.consignor@example.com",
       splitPercent: 60,
@@ -34,6 +35,7 @@ async function main() {
     data: {
       storeId: store.id,
       accountType: "BOOTH_OWNER",
+      accountNumber: 3,
       name: "Vintage Vinyls (Booth #402)",
       email: "booth402@example.com",
       splitPercent: 70,
@@ -42,13 +44,14 @@ async function main() {
   });
 
   const donorAccount = await prisma.account.create({
-    data: { storeId: store.id, accountType: "DONOR", name: "Estate Liquidation Donors" },
+    data: { storeId: store.id, accountNumber: 4, accountType: "DONOR", name: "Estate Liquidation Donors" },
   });
 
   const vendorAccount = await prisma.account.create({
     data: {
       storeId: store.id,
       accountType: "VENDOR",
+      accountNumber: 5,
       name: "R. Vance Wholesale",
       splitPercent: 50,
       currentBalance: 95.0,
@@ -108,13 +111,22 @@ async function main() {
     { sku: "CLO-5001", description: "Wool Peacoat - Navy", category: "Clothing", size: "L", price: 78.0, status: "AVAILABLE", accountId: consignorAccount.id, days: 33 },
   ];
 
+  // Tag numbers "<account#>-<n>": each account's own item sequence (Account.nextItemNumber).
+  const accountNumberById = new Map(
+    [storeAccount, consignorAccount, boothAccount, donorAccount, vendorAccount].map((a) => [a.id, a.accountNumber!])
+  );
+  const seqByAccount = new Map<string, number>();
   for (const [index, def] of itemDefs.entries()) {
+    const accountItemNumber = (seqByAccount.get(def.accountId) ?? 0) + 1;
+    seqByAccount.set(def.accountId, accountItemNumber);
     const intakeDate = new Date();
     intakeDate.setDate(intakeDate.getDate() - def.days);
     const item = await prisma.item.create({
       data: {
         sku: def.sku,
         itemNumber: index + 1,
+        tagAccountNumber: accountNumberById.get(def.accountId),
+        accountItemNumber,
         description: def.description,
         category: def.category,
         brand: def.brand,
@@ -155,6 +167,10 @@ async function main() {
     UPDATE "Account" SET "lastSaleAt" = (
       SELECT MAX(s."saleDate") FROM "Item" i JOIN "Sale" s ON s."itemId" = i."id" WHERE i."accountId" = "Account"."id"
     );`);
+
+  for (const [accountId, last] of seqByAccount) {
+    await prisma.account.update({ where: { id: accountId }, data: { nextItemNumber: last + 1 } });
+  }
 
   await prisma.payout.create({ data: { payoutNumber: 1, accountId: consignorAccount.id, amount: 95.0, status: "PAID", paidAt: new Date() } });
   await prisma.payout.create({ data: { payoutNumber: 2, accountId: boothAccount.id, amount: 420.0, status: "REQUESTED" } });

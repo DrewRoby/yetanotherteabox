@@ -6,3 +6,8 @@ xxdetritus/
 *.db-journal
 .env
 store.yaml
+# liberty-etl sync: real source configs hold credentials; reports hold customer names
+Docs/Migrations/liberty-etl/config/*.env
+!Docs/Migrations/liberty-etl/config/*.example.env
+Docs/Migrations/liberty-etl/reports/sync-*.md
+Rwdback/

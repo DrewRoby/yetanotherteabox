@@ -21,7 +21,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <aside className="w-60 bg-ink text-white flex flex-col border-r-4 border-gold shrink-0">
         <div className="px-5 py-6 border-b border-white/10 flex items-center gap-3">
           <div className="w-9 h-9 bg-crimson flex items-center justify-center font-bold text-lg border border-gold">茶</div>
-          <span className="font-bold tracking-wider uppercase text-gold text-sm">Teabox ERP</span>
+          <span className="font-bold tracking-wider uppercase text-gold text-sm">Teabox Consignment</span>
         </div>
         <nav className="flex-1 py-2">
           {visibleNav.map((entry) => {
@@ -41,6 +41,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </nav>
         <div className="px-5 py-4 text-[11px] text-gray-400 border-t border-white/10">
           {user.storeName}
+          <div className="text-[10px] text-gray-500 mt-1">Teabox v{__APP_VERSION__}</div>
         </div>
       </aside>
 

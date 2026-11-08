@@ -117,7 +117,7 @@ export function LoginPage() {
     <div className="min-h-screen flex flex-col items-center justify-center bg-bone">
       <div className="fixed top-0 w-full h-[60px] bg-white border-b-2 border-ink flex items-center px-6">
         <div className="w-[34px] h-[34px] bg-crimson text-white flex items-center justify-center font-bold rounded-sm mr-4">茶</div>
-        <div className="font-bold uppercase tracking-wide">Teabox ERP</div>
+        <div className="font-bold uppercase tracking-wide">Teabox Consignment</div>
       </div>
 
       <div className="corner-ticks bg-white border border-ink w-[420px] shadow-xl">
@@ -159,7 +159,7 @@ export function LoginPage() {
                 disabled={submitting}
                 className="w-full py-4 bg-crimson text-white border border-ink font-extrabold uppercase tracking-widest hover:bg-ink transition-colors disabled:opacity-50"
               >
-                {submitting ? "Signing in..." : "Access ERP"}
+                {submitting ? "Signing in..." : "Access Consignment"}
               </button>
             </form>
 

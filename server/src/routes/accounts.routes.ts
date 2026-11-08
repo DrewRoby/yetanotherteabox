@@ -7,7 +7,13 @@ import { requireRole } from "../middleware/requireRole";
 import { recordAudit, recordAuditMany } from "../lib/audit";
 import { ACCOUNT_TYPES, BALANCE_BEARING_ACCOUNT_TYPES, ITEM_STATUSES, type AccountType } from "../lib/enums";
 import { itemListQuerySchema, listItems } from "../services/itemList.service";
-import { generatePaidPayout, isBalanceBearing, nextPayoutNumber, serializeAccount } from "../services/accounts.service";
+import {
+  createNumberedAccount,
+  generatePaidPayout,
+  isBalanceBearing,
+  nextPayoutNumber,
+  serializeAccount,
+} from "../services/accounts.service";
 
 export const accountsRouter = Router();
 accountsRouter.use(authenticate);
@@ -182,10 +188,21 @@ accountsRouter.get(
     const payout = await prisma.payout.findFirst({
       where: { id: req.params.payoutId, accountId: req.params.id, account: { storeId: req.session!.storeId } },
       include: {
-        account: { select: { id: true, name: true, accountType: true } },
+        account: { select: { id: true, accountNumber: true, name: true, accountType: true } },
         lines: {
           include: {
-            item: { select: { id: true, sku: true, description: true, category: true, size: true, price: true } },
+            item: {
+              select: {
+                id: true,
+                sku: true,
+                tagAccountNumber: true,
+                accountItemNumber: true,
+                description: true,
+                category: true,
+                size: true,
+                price: true,
+              },
+            },
             sale: { select: { id: true, saleDate: true, salePrice: true } },
           },
         },
@@ -237,9 +254,7 @@ accountsRouter.post("/", requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER"), async 
   if (parsed.data.isStoreAccount && !BALANCE_BEARING_ACCOUNT_TYPES.includes(parsed.data.accountType)) {
     return res.status(400).json({ error: `${parsed.data.accountType} accounts can't be flagged as store accounts` });
   }
-  const account = await prisma.account.create({
-    data: { ...parsed.data, storeId: req.session!.storeId },
-  });
+  const account = await createNumberedAccount({ ...parsed.data, storeId: req.session!.storeId });
   await recordAudit(req.session!, "Account", account.id, "CREATE", {
     accountType: account.accountType,
     isStoreAccount: account.isStoreAccount,

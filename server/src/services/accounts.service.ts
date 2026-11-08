@@ -26,6 +26,7 @@ export function serializeAccount(account: {
   accountType: string;
   isStoreAccount: boolean;
   isActive: boolean;
+  accountNumber: number | null;
   name: string;
   email: string | null;
   phone: string | null;
@@ -36,6 +37,7 @@ export function serializeAccount(account: {
 }) {
   return {
     id: account.id,
+    accountNumber: account.accountNumber,
     accountType: account.accountType,
     isStoreAccount: account.isStoreAccount,
     isActive: account.isActive,
@@ -57,6 +59,39 @@ export function consignorShareOf(salePrice: number, splitPercent: number | null)
   return (salePrice * (splitPercent ?? 100)) / 100;
 }
 
+// The account's sales not yet covered by a payout — what its next payout will itemize:
+// no PayoutLine *and* sold after the account's latest PAID payout (see
+// generatePaidPayout for why the date floor). Shared with the payout statement report
+// (services/payoutReport.service.ts) so "sold, not yet paid" there matches exactly what
+// a payout would pay.
+export async function unpaidSalesOf(accountId: string) {
+  const lastPaid = await prisma.payout.findFirst({
+    where: { accountId, status: "PAID" },
+    orderBy: { createdAt: "desc" },
+  });
+  return prisma.sale.findMany({
+    where: {
+      item: { accountId },
+      payoutLines: { none: {} },
+      ...(lastPaid ? { saleDate: { gt: lastPaid.paidAt ?? lastPaid.createdAt } } : {}),
+    },
+    include: {
+      item: {
+        select: {
+          id: true,
+          sku: true,
+          tagAccountNumber: true,
+          accountItemNumber: true,
+          description: true,
+          category: true,
+          consignorPercent: true,
+        },
+      },
+    },
+    orderBy: { saleDate: "asc" },
+  });
+}
+
 // Pays out an account's full current balance as one PAID Payout, itemized with a SALE
 // line per sale not yet covered by any earlier payout. Unpaid = no PayoutLine *and*
 // sold after the account's latest PAID payout: the date floor keeps historical sales
@@ -70,19 +105,7 @@ export async function generatePaidPayout(account: {
   splitPercent: number | null;
 }) {
   const amount = account.currentBalance;
-  const lastPaid = await prisma.payout.findFirst({
-    where: { accountId: account.id, status: "PAID" },
-    orderBy: { createdAt: "desc" },
-  });
-  const unpaidSales = await prisma.sale.findMany({
-    where: {
-      item: { accountId: account.id },
-      payoutLines: { none: {} },
-      ...(lastPaid ? { saleDate: { gt: lastPaid.paidAt ?? lastPaid.createdAt } } : {}),
-    },
-    include: { item: { select: { id: true, description: true, consignorPercent: true } } },
-    orderBy: { saleDate: "asc" },
-  });
+  const unpaidSales = await unpaidSalesOf(account.id);
 
   const lines: { lineType: string; itemId?: string; saleId?: string; description: string | null; amount: number }[] =
     unpaidSales.map((s) => ({
@@ -130,10 +153,34 @@ function roundCents(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+// Account.accountNumber for a new account: one past the end of the store's ordinary
+// numbering — the first run of numbers with no gap over ACCOUNT_NUMBER_GAP — so it
+// continues a migrated system's sequence but not its reserved high numbers (Hidden
+// Treasures' Liberty data runs 0–4545, then has special accounts at 5000, 7000, 30062,
+// 60001, 800xx store buckets, 999997 "Purged Account", 999999 "Cash Sales"). The result
+// is always unused: past the run's end, the next number in use is more than the gap
+// away. Call inside the same interactive transaction as the create (same reasoning as
+// nextPayoutNumber) — or just use createNumberedAccount below.
+export const ACCOUNT_NUMBER_GAP = 100;
+export async function nextAccountNumber(tx: Prisma.TransactionClient, storeId: string): Promise<number> {
+  const [row] = await tx.$queryRaw<{ last: bigint | number | null }[]>`
+    SELECT MIN(a."accountNumber") AS "last" FROM "Account" a
+    WHERE a."storeId" = ${storeId} AND a."accountNumber" IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM "Account" b WHERE b."storeId" = a."storeId"
+        AND b."accountNumber" > a."accountNumber" AND b."accountNumber" <= a."accountNumber" + ${ACCOUNT_NUMBER_GAP}
+    )`;
+  return row?.last == null ? 1 : Number(row.last) + 1;
+}
+
+// Every path that creates an Account goes through this, so each one gets a number.
+export async function createNumberedAccount(data: Omit<Prisma.AccountUncheckedCreateInput, "accountNumber">) {
+  return prisma.$transaction(async (tx) =>
+    tx.account.create({ data: { ...data, accountNumber: await nextAccountNumber(tx, data.storeId) } })
+  );
+}
+
 export async function getOrCreateStoreAccount(storeId: string) {
   const existing = await prisma.account.findFirst({ where: { storeId, accountType: "STORE" } });
   if (existing) return existing;
-  return prisma.account.create({
-    data: { storeId, accountType: "STORE", name: "Store-Owned Inventory" },
-  });
+  return createNumberedAccount({ storeId, accountType: "STORE", name: "Store-Owned Inventory" });
 }

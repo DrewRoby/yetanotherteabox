@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
 import { Button, Card } from "../components/Card";
+import { itemNo } from "../lib/itemNumber";
 
 // Lazy: pulls in the @zxing/browser decoder, which is sizable and only needed once
 // someone actually opens the camera scanner.
@@ -9,6 +10,7 @@ const BarcodeScanner = lazy(() => import("../components/BarcodeScanner").then((m
 interface CartItem {
   itemId: string;
   sku: string;
+  itemNo: string; // "<account#>-<item#>" (or the SKU when an item has none)
   description: string;
   accountName: string;
   price: number;
@@ -17,10 +19,13 @@ interface CartItem {
 interface SearchResult {
   id: string;
   sku: string;
+  tagAccountNumber: number | null;
+  accountItemNumber: number | null;
   description: string;
   price: number;
   account: { name: string };
 }
+type PosItem = SearchResult;
 
 export function PosPage() {
   const [scanCode, setScanCode] = useState("");
@@ -63,7 +68,7 @@ export function PosPage() {
   async function lookupCode(code: string) {
     setScanError(null);
     try {
-      const item = await api.get<{ id: string; sku: string; description: string; price: number; account: { name: string } }>(
+      const item = await api.get<PosItem>(
         `/pos/lookup?code=${encodeURIComponent(code)}`
       );
       addToCart(item);
@@ -80,8 +85,8 @@ export function PosPage() {
     setScanCode("");
   }
 
-  function addToCart(item: { id: string; sku: string; description: string; price: number; account: { name: string } }) {
-    setCart((c) => [...c, { itemId: item.id, sku: item.sku, description: item.description, accountName: item.account.name, price: item.price }]);
+  function addToCart(item: PosItem) {
+    setCart((c) => [...c, { itemId: item.id, sku: item.sku, itemNo: itemNo(item), description: item.description, accountName: item.account.name, price: item.price }]);
   }
 
   function removeFromCart(itemId: string) {
@@ -129,7 +134,7 @@ export function PosPage() {
                 value={scanCode}
                 onChange={(e) => setScanCode(e.target.value)}
                 autoFocus
-                placeholder="Scan barcode or enter SKU..."
+                placeholder="Scan barcode or enter item # (4545-12)..."
                 className="w-full border border-ink p-3 focus:border-crimson"
               />
             </form>
@@ -157,7 +162,7 @@ export function PosPage() {
                   <td className="p-3">
                     <span className="font-bold block">{item.description}</span>
                     <span className="text-[10px] text-gray-500">
-                      SKU: {item.sku} <span className="text-gold font-bold">|</span> {item.accountName}
+                      Item # {item.itemNo} <span className="text-gold font-bold">|</span> {item.accountName}
                     </span>
                   </td>
                   <td className="p-3">${item.price.toFixed(2)}</td>
@@ -229,7 +234,7 @@ function SearchModal({
   onSelect,
 }: {
   onClose: () => void;
-  onSelect: (item: { id: string; sku: string; description: string; price: number; account: { name: string } }) => void;
+  onSelect: (item: PosItem) => void;
 }) {
   const [q, setQ] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -264,7 +269,7 @@ function SearchModal({
             setQ(e.target.value);
             runSearch(e.target.value);
           }}
-          placeholder="Search by description, brand, category..."
+          placeholder="Search by item #, description, brand, category..."
           className="border border-ink p-3 mb-4"
         />
         <div className="overflow-y-auto flex-1">
@@ -279,7 +284,7 @@ function SearchModal({
               <div>
                 <div className="font-bold text-sm">{r.description}</div>
                 <div className="text-[11px] text-gray-500">
-                  SKU: {r.sku} · {r.account.name}
+                  Item # {itemNo(r)} · {r.account.name}
                 </div>
               </div>
               <div className="font-bold">${r.price.toFixed(2)}</div>

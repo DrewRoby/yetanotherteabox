@@ -1,6 +1,6 @@
-# Teabox ERP
+# Teabox Consignment
 
-Consignment-shop-in-a-box ERP. Implements the planning docs at repo root
+Consignment-shop-in-a-box system. Implements the planning docs at repo root
 (`project_requirements_document.md`, `tech_stack_document.md`,
 `backend_structure_document.md`, `security_guideline_document.md`,
 `app_flow_document.md`) and the 12-task punch list in `tasks.json`, which is the
@@ -9,6 +9,18 @@ intake**, a **POS inventory search modal**, and **account-type differentiation**
 docs describe a much bigger system (multi-store marketplace, blockchain escrow, real
 hardware/cloud) — none of that is built; see "Deliberately not built" below.
 `wireframes/*.html` are the static mockups every screen was built to match.
+
+## Project status — still in development
+
+Teabox is **not in production use**. Hidden Treasures runs on Liberty; staff have
+only tried Teabox out, and nothing they enter in it is relied on. Everything in this
+repo can be undone: `dist-bin/teabox.db` can be rebuilt from a Liberty backup at any
+time (`liberty-etl` `npm run migrate`), and older copies sit in `dist-bin/arch/`.
+So re-migrating, resetting or reshaping the data is a routine step, not a special
+event. Still archive the current DB before replacing it, and carry over anything
+staff set up that's worth keeping (e.g. account deactivations, sign-in badges — as
+done on 2026-11-07). Wording elsewhere about the "live" database dates from before
+this was clarified (2026-11-07).
 
 ## Layout
 
@@ -20,7 +32,9 @@ hardware/cloud) — none of that is built; see "Deliberately not built" below.
 | `install.bat`, `dist-bin/teabox.exe`, `config.env.example` | Windows x64 build for on-site test deploys (portable: exe/config/db stay together, no XDG dir). Built with `cd server && npm run build:windows` — works cross-built from Linux or run natively on Windows under Git Bash. See README's "Windows test-deploy build" and `Docs/windows-test-deploy-setup.md` for first-run/reset/config-driven-setup details. |
 | `wireframes/` | Reference mockups (Ming Dynasty theme: crimson `#b91c1c`, gold `#d4af37`, ink `#1a1a1a`, bone `#f8f3e7`). |
 | `*_document.md`, `tasks.json` | Original spec. Consult before adding features not yet built (e.g. marketplace) to check intended shape. |
-| `Docs/Migrations/` | Living specs for migrating another shop's data into Teabox — `sql_server_data_model_migration_spec.md` (first source: Liberty by ResaleWorld) plus `liberty-etl/` (the actual profiling/transform/load tool, not shipped product code). Update the spec alongside `schema.prisma`/`enums.ts` changes that affect what a migration must produce, then run `cd server && npm run check:migration-spec -- --write` to re-stamp it (plain `npm run check:migration-spec` fails if the spec is stale relative to those two files). `liberty-etl/README.md` covers running it on Windows against a native SQL Server Express restore. **`dist-bin/teabox.db` is the live Hidden Treasures database (real data entered in the app since 2026-10-11)** — upgrade it in place (`prisma migrate deploy`, backup into `dist-bin/arch/` first), never by re-running the migration, unless the user explicitly asks for a reset. |
+| `Docs/Migrations/` | Living specs for migrating another shop's data into Teabox — `sql_server_data_model_migration_spec.md` (first source: Liberty by ResaleWorld) plus `liberty-etl/` (the actual profiling/transform/load tool, not shipped product code). Update the spec alongside `schema.prisma`/`enums.ts` changes that affect what a migration must produce, then run `cd server && npm run check:migration-spec -- --write` to re-stamp it (plain `npm run check:migration-spec` fails if the spec is stale relative to those two files). `liberty-etl/README.md` covers running it on Windows against a native SQL Server Express restore. `dist-bin/teabox.db` holds Hidden Treasures' real data migrated from Liberty (last fully re-migrated 2026-11-07 from the 2026-11-04 backup), but it is **a development database, not production** — see "Project status" below. Schema changes can be applied in place (`prisma migrate deploy`) or by re-migrating; copy the old file into `dist-bin/arch/` first either way. |
+| `Docs/sync-design.md` | How syncing works today (Liberty → Teabox reconcile) and the recommended path for the cloud: snapshot backups for DR, an outbox journal for the Phase 3 aggregate, and a reconcile pass as the safety net. Read before building any sync/backup. |
+| `RELEASE_NOTES-v020.md` | Per-version notes, newest first (Drew's file, with his own annotations — the 0.2.0 notes; was `RELEASE_NOTES.md`). The version lives in `server/`, `web/` and `liberty-etl`'s `package.json` + `package-lock.json` (bump all three together: `npm version <x.y.z> --no-git-tag-version` in each); the web build shows it in the sidebar footer. **Bump the patch number once per working session** (see "Versioning" below). |
 | `.claude/launch.json` | Dev servers for the preview tools: `server`/`web` (:4000/:5173) and `server-alt`/`web-alt` (:4001/:5174 — `web`'s Vite proxy honors `API_PROXY_TARGET`), so a dev stack can run beside a `teabox.exe` holding :4000. Point `server-alt` at a scratch DB with `DATABASE_URL` for real-data testing; never at `dist-bin/teabox.db`. |
 | `Docs/windows-test-deploy-setup.md` | Walkthrough for the Windows package: building it, where `teabox.db` actually lives, resetting to a true first run, driving setup from `config.env` instead of the wizard, and hand-generating a fresh database with `prisma migrate deploy` — including two Prisma+SQLite+Windows path gotchas found while writing it (see this file's own gotchas list below). |
 
@@ -41,7 +55,7 @@ environment (e.g. via `config.env` on the Windows build), `maybeAutoCompleteSetu
 on startup, before the server accepts its first request. Only fires against a fresh
 (zero-store) database; inert afterward. See `Docs/windows-test-deploy-setup.md`.
 
-## Built beyond the original punch list (2026-10-10 → 10-12)
+## Built beyond the original punch list (2026-10-10 → 11-07)
 
 `tasks.json` scoped the first build; the app has since grown, driven by the Hidden
 Treasures cutover. Details live in `server/CLAUDE.md` / `web/CLAUDE.md`:
@@ -76,6 +90,33 @@ Treasures cutover. Details live in `server/CLAUDE.md` / `web/CLAUDE.md`:
   Return, Write Off; label first, Owner/Admin applies), and a Payout Obligations view
   (balances aged by last activity, floor value by owner). Hidden Treasures' policy:
   consignments expire after **90 days**, then become the store's.
+- **Liberty catch-up sync** (`liberty-etl` `npm run sync`, 2026-10-13): reconciles
+  Teabox with a live Liberty (the shop keeps using it until cutover) — one-way,
+  idempotent, conflicts reported rather than overwritten; every applied run is a
+  `SyncRun` row. Design + the recommended cloud path: `Docs/sync-design.md`.
+- **v0.2.1** (2026-11-07) — the owner's first round of feedback on 0.2.0, in two parts.
+  **Round 1**: sans-serif numerals app-wide, account
+  numbers (Liberty's `CLIENT.ACCOUNT`) as a column and in the account header ("Abby
+  Dudley - 4545"), items shown and searchable as `<account#>-<item#>` (Liberty's
+  `ACCOUNT-ITEM_NUM`), "ERP" → "Consignment" in the UI. See `server/CLAUDE.md`'s
+  "Account and tag numbers"; the dev DB was numbered in place by `liberty-etl`'s
+  `npm run backfill-tag-numbers` (pre-change copy in `dist-bin/arch/`).
+  **Round 2**: Reports > **Payouts** (find which payout paid any item;
+  itemized statements that reconcile to the balance) and **Active Items**, both with
+  client-side PDF export (`web/src/lib/pdf.ts`), also reachable from the account page
+  ("Print for consignor") and Day Detail. Not yet written up in release notes.
+- **v0.2.0** (2026-10-13) — first versioned release after the 0.1.0 the owner took
+  home on 2026-10-11 (commit `f4e2d01`); see `RELEASE_NOTES-v020.md`.
+
+## Versioning
+
+**Bump the patch number with every working session** (0.2.1 → 0.2.2 → …), even if
+the session only touched one area — Drew's request (2026-11-07), so every exe he hands
+out or tests is distinguishable in the sidebar footer. Do it in `server/`, `web/` and
+`Docs/Migrations/liberty-etl/` together (`npm version <x.y.z> --no-git-tag-version` in
+each — it updates `package-lock.json` too), add the session's work under that version
+in "Built beyond the original punch list" above, and rebuild `dist-bin/teabox.exe` if
+the session ends with a build. Minor/major bumps stay Drew's call.
 
 ## Open TODO — validate with the shop owner (Sherry)
 
@@ -95,6 +136,17 @@ If they disagree: Liberty's own balance report export becomes the authority (loa
 per-client figures into `currentBalance` directly), or `HOLD_IND`/pending-code rows are
 treated differently. Whether any "N" checks were never cashed can only come from bank
 records.
+
+**Also ask Sherry (2026-11-07, item numbers):** ~2,400 items on the floor (162k
+migrated items overall) have no `<account#>-<item#>` — store-owned stock that Liberty no
+longer links to any account (no `CLIENT_ITEM` row, no ledger credit). Teabox shows their
+`LIB-` SKU instead. Ask what Liberty prints/shows for one of them (e.g. search Teabox
+Inventory Audit for store-owned items with no tag number). Also: which account should
+the shop's own new stock be entered under — Teabox's built-in "Store-Owned Inventory"
+(numbered 4546, after Liberty's last client) or Liberty's own store account(s), e.g.
+1 "Shopper SAM HT STORE" / the 800xx "Hidden Treasures 20XX" buckets? While Liberty is
+still in use, each new Liberty client takes the next number, so `npm run sync` will bump
+the built-in store account's number (reported as a conflict) until cutover.
 
 ## The one rule that shapes everything
 
@@ -237,6 +289,9 @@ Chosen shape — one-way outbox to a dumb cloud aggregator, not a shared live da
   actually requested — don't back into it.
 - `runHeartbeatSync()` in `server/src/adapters/cloudSync.ts` already sketches the
   right shape for the push side (a periodic app-level push, not log tailing).
+- Concrete recommendation (2026-10-13), and what carries over from the Liberty sync
+  (origin markers, owner-wins conflict rule, recompute-don't-replay, `SyncRun` log):
+  `Docs/sync-design.md`.
 
 This also resolves the self-hosted-vs-SaaS framing from earlier: it's neither — each
 shop stays a self-contained install (today's model, unchanged), with a thin optional

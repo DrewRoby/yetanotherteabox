@@ -4,10 +4,13 @@ import { api } from "../../api/client";
 import { Badge, Card } from "../../components/Card";
 import { DateStepper } from "./DateStepper";
 import { avgTicket, count, longDate, money, type Metrics } from "./reportFormat";
+import { itemNo, type ItemNumbered } from "../../lib/itemNumber";
 
 interface ItemRef {
   id: string;
   sku: string;
+  tagAccountNumber: number | null;
+  accountItemNumber: number | null;
   description: string;
   category: string;
   account: { id: string; name: string };
@@ -45,7 +48,7 @@ interface Detail {
     source: string;
     itemCount: number;
     createdBy: { name: string } | null;
-    items: { id: string; itemId: string | null; sku: string; description: string; price: number }[];
+    items: { id: string; itemId: string | null; sku: string; tagNumber: string | null; description: string; price: number }[];
   }[];
   payouts: {
     id: string;
@@ -133,7 +136,7 @@ export function DayDetail({ date, onDate }: { date: string; onDate: (date: strin
           <Added data={data} />
           <Priced data={data} />
           <Printed data={data} />
-          <Payouts data={data} />
+          <Payouts data={data} date={date} />
         </div>
       )}
     </div>
@@ -186,14 +189,14 @@ function Empty({ cols, children }: { cols: number; children: ReactNode }) {
   );
 }
 
-function SkuLink({ item }: { item: { id: string | null; sku: string } }) {
+function SkuLink({ item }: { item: { id: string | null } & ItemNumbered }) {
   return item.id ? (
-    <Link to={`/inventory/${item.id}`} className="font-mono text-xs hover:text-crimson hover:underline">
-      {item.sku}
+    <Link to={`/inventory/${item.id}`} className="text-xs hover:text-crimson hover:underline" title={`SKU ${item.sku}`}>
+      {itemNo(item)}
     </Link>
   ) : (
-    <span className="font-mono text-xs text-gray-400" title="Item deleted">
-      {item.sku}
+    <span className="text-xs text-gray-400" title="Item deleted">
+      {itemNo(item)}
     </span>
   );
 }
@@ -375,7 +378,7 @@ function Printed({ data }: { data: Detail }) {
                 <div className="flex flex-wrap gap-x-4 gap-y-1">
                   {j.items.map((t) => (
                     <span key={t.id} className="whitespace-nowrap">
-                      <SkuLink item={{ id: t.itemId, sku: t.sku }} />{" "}
+                      <SkuLink item={{ id: t.itemId, sku: t.sku, tagNumber: t.tagNumber }} />{" "}
                       <span className="text-xs text-gray-600">
                         {t.description.slice(0, 32)} · {money(t.price)}
                       </span>
@@ -391,10 +394,18 @@ function Printed({ data }: { data: Detail }) {
   );
 }
 
-function Payouts({ data }: { data: Detail }) {
+function Payouts({ data, date }: { data: Detail; date: string }) {
   const total = data.payouts.reduce((t, p) => t + p.amount, 0);
   return (
     <Section id="payouts" title="Payouts">
+      <div className="text-xs mb-2">
+        <Link
+          to={`/reports?tab=payouts&pofrom=${date}&poto=${date}`}
+          className="text-crimson font-bold hover:underline"
+        >
+          Itemize and print these in the Payouts report →
+        </Link>
+      </div>
       <table className="w-full text-sm min-w-[560px]">
         <thead>
           <tr>

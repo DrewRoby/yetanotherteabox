@@ -17,6 +17,8 @@ import {
 import { z } from "zod";
 import { recordAudit } from "../lib/audit";
 import { issueBadges, listBadgeEligibleUsers, revokeBadge } from "../services/badge.service";
+import { listPayouts, payoutListQuery, payoutStatement, statementQuery } from "../services/payoutReport.service";
+import { activeTotals, auditItems, type Filters as AuditFilters } from "../services/inventoryAudit.service";
 
 export const reportsRouter = Router();
 reportsRouter.use(authenticate);
@@ -127,7 +129,13 @@ reportsRouter.get("/print-jobs", requireRole(...REPORT_ROLES), async (req, res) 
   const where: Prisma.PrintJobWhereInput = {
     storeId: req.session!.storeId,
     ...(from || to ? { createdAt: { ...(from ? { gte: from } : {}), ...(to ? { lt: addDays(to, 1) } : {}) } } : {}),
-    ...(q ? { items: { some: { OR: [{ sku: { contains: q } }, { description: { contains: q } }] } } } : {}),
+    ...(q
+      ? {
+          items: {
+            some: { OR: [{ tagNumber: q.trim() }, { sku: { contains: q } }, { description: { contains: q } }] },
+          },
+        }
+      : {}),
   };
   const [rows, total] = await Promise.all([
     prisma.printJob.findMany({
@@ -143,7 +151,7 @@ reportsRouter.get("/print-jobs", requireRole(...REPORT_ROLES), async (req, res) 
         activeRole: true,
         reprintOfId: true,
         createdBy: { select: { name: true } },
-        items: { orderBy: { position: "asc" }, take: 3, select: { sku: true, description: true } },
+        items: { orderBy: { position: "asc" }, take: 3, select: { sku: true, tagNumber: true, description: true } },
       },
     }),
     prisma.printJob.count({ where }),
@@ -162,7 +170,21 @@ reportsRouter.get("/print-jobs/:id", requireRole(...REPORT_ROLES), async (req, r
         orderBy: { position: "asc" },
         // Current item state alongside the snapshot, so the page can flag tags whose
         // price/description changed since they were printed.
-        include: { item: { select: { id: true, sku: true, description: true, price: true, status: true, category: true, size: true } } },
+        include: {
+          item: {
+            select: {
+              id: true,
+              sku: true,
+              tagAccountNumber: true,
+              accountItemNumber: true,
+              description: true,
+              price: true,
+              status: true,
+              category: true,
+              size: true,
+            },
+          },
+        },
       },
     },
   });
@@ -232,3 +254,64 @@ reportsRouter.delete(
     res.status(204).send();
   }
 );
+
+// ---- Payouts report + Active Items report ----
+// Staff-wide (Employees too): the counter is where a consignor asks "what have I been
+// paid for?" / "what of mine is still out there?", and an employee already sees all of
+// this on the account page. The web Reports tabs themselves stay Manager+; the account
+// page's statement / active-items buttons use these same endpoints.
+const STAFF_ROLES = ["SYSTEM_ADMIN", "OWNER", "MANAGER", "EMPLOYEE"] as const;
+
+reportsRouter.get("/payouts", requireRole(...STAFF_ROLES), async (req, res) => {
+  const parsed = payoutListQuery.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  res.json(await listPayouts(req.session!.storeId, parsed.data));
+});
+
+reportsRouter.get("/payouts/statement", requireRole(...STAFF_ROLES), async (req, res) => {
+  const parsed = statementQuery.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const statement = await payoutStatement(req.session!.storeId, parsed.data);
+  if (!statement) return res.status(404).json({ error: "Account not found" });
+  res.json(statement);
+});
+
+// Active Items: every AVAILABLE/PENDING item, optionally for one account — the same
+// active set and consignor-share rule as the Inventory Audit (inventoryAudit.service).
+// pageSize goes up to 50,000 so the PDF export can fetch a whole store (~21k) at once.
+const activeItemsQuery = z.object({
+  accountId: z.string().min(1).optional(),
+  q: z.string().trim().min(1).optional(),
+  category: z.string().min(1).optional(),
+  status: z.enum(["AVAILABLE", "PENDING"]).optional(),
+  sort: z.enum(["intake", "price", "sku", "account", "category"]).default("sku"),
+  dir: z.enum(["asc", "desc"]).default("asc"),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(50000).default(50),
+});
+
+reportsRouter.get("/active-items", requireRole(...STAFF_ROLES), async (req, res) => {
+  const parsed = activeItemsQuery.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const { accountId, q, category, status, ...opts } = parsed.data;
+  const storeId = req.session!.storeId;
+  const filters: AuditFilters = {
+    ...(accountId ? { accountId } : {}),
+    ...(q ? { q } : {}),
+    ...(category ? { category: [category] } : {}),
+    ...(status ? { status: [status] } : {}),
+  };
+  const [items, totals, store, account] = await Promise.all([
+    auditItems(storeId, filters, opts),
+    activeTotals(storeId, filters),
+    prisma.store.findUniqueOrThrow({ where: { id: storeId }, select: { name: true, location: true } }),
+    accountId
+      ? prisma.account.findFirst({
+          where: { id: accountId, storeId },
+          select: { id: true, accountNumber: true, name: true, accountType: true, isStoreAccount: true },
+        })
+      : null,
+  ]);
+  if (accountId && !account) return res.status(404).json({ error: "Account not found" });
+  res.json({ ...items, totals, store, account, generatedAt: new Date() });
+});
