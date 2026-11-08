@@ -91,7 +91,7 @@ model UserRole {
 model Account {
   id             String    @id @default(cuid())
   storeId        String
-  accountType    String
+  accountType    String // AccountType in src/lib/enums.ts — CONSIGNOR | VENDOR | DONOR | BOOTH_OWNER | STORE | HOLDING (Lost & Found: owner unknown until claimed)
   name           String
   email          String?
   phone          String?
@@ -171,6 +171,7 @@ model Item {
   // the add_item_sold_paid_dates migration for the canonical SQL.
   soldAt          DateTime?
   paidOutAt       DateTime?
+  claimedAt       DateTime? // when this item was claimed off a HOLDING account (Lost & Found) for its real owner — lets that owner's next payout itemize a sale that predates their last payout; see claimHeldItems() in src/services/accounts.service.ts
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 

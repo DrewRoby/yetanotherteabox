@@ -30,11 +30,13 @@ async function main() {
   `;
   check("every Item.accountId matches storeId", Number(orphanItems[0].n) === 0, `${orphanItems[0].n} orphaned`);
 
-  // 4. DONOR/STORE accounts have currentBalance = 0 and no Payout rows.
+  // 4. DONOR/STORE/HOLDING accounts have currentBalance = 0, and DONOR/STORE ones no
+  // Payout rows (a HOLDING account may keep payouts from before it was one — Liberty
+  // paid its Lost & Found out three times).
   const badBalance = await prisma.account.count({
-    where: { accountType: { in: ["DONOR", "STORE"] }, currentBalance: { not: 0 } },
+    where: { accountType: { in: ["DONOR", "STORE", "HOLDING"] }, currentBalance: { not: 0 } },
   });
-  check("DONOR/STORE accounts have currentBalance = 0", badBalance === 0, `${badBalance} violating`);
+  check("DONOR/STORE/HOLDING accounts have currentBalance = 0", badBalance === 0, `${badBalance} violating`);
   const flaggedWithBalance = await prisma.account.count({ where: { isStoreAccount: true, currentBalance: { not: 0 } } });
   check("isStoreAccount accounts have currentBalance = 0", flaggedWithBalance === 0, `${flaggedWithBalance} violating`);
   const donorStorePayouts = await prisma.payout.count({

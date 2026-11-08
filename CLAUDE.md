@@ -94,6 +94,15 @@ Treasures cutover. Details live in `server/CLAUDE.md` / `web/CLAUDE.md`:
   Teabox with a live Liberty (the shop keeps using it until cutover) — one-way,
   idempotent, conflicts reported rather than overwritten; every applied run is a
   `SyncRun` row. Design + the recommended cloud path: `Docs/sync-design.md`.
+- **v0.2.2** (2026-11-08) — what Liberty's store "inventory" accounts really are
+  (shop purchases + walk-in donations, not expired consignments; no year-to-year
+  carry-over; 50/50 store stock produced real payouts — see
+  `Docs/Migrations/liberty-etl/reports/store_inventory_accounts_analysis.md` and the
+  Sherry TODO below), then a new **`HOLDING` account type for Lost & Found**: sales
+  credit nobody until staff claim the item for its owner's account ("Waiting to be
+  claimed" on the account page; bulk "release to the store" by sale date). Liberty's
+  lost & found (client 101550, account 2834) converted in the dev DB — its $2,892.48
+  "balance" became derived unclaimed sales (pre-change copy in `dist-bin/arch/`).
 - **v0.2.1** (2026-11-07) — the owner's first round of feedback on 0.2.0, in two parts.
   **Round 1**: sans-serif numerals app-wide, account
   numbers (Liberty's `CLIENT.ACCOUNT`) as a column and in the account header ("Abby
@@ -147,6 +156,30 @@ the shop's own new stock be entered under — Teabox's built-in "Store-Owned Inv
 1 "Shopper SAM HT STORE" / the 800xx "Hidden Treasures 20XX" buckets? While Liberty is
 still in use, each new Liberty client takes the next number, so `npm run sync` will bump
 the built-in store account's number (reported as a conflict) until cutover.
+
+**Also ask Sherry (2026-11-08, store "inventory" accounts):** analysis in
+`Docs/Migrations/liberty-etl/reports/store_inventory_accounts_analysis.md` — the 800xx
+year accounts are the shop's own purchases (vendor buys like Melissa & Doug,
+closeout lots, bought used goods), not expired consignments; nothing rolls forward
+between years. Several years were entered at 50/50 instead of 100% to store, so Liberty
+paid "consignor" checks to those accounts (e.g. ~$16k on 2026-01-17, incl. $6,192 to
+3810 Melissa & Doug), and Teabox imported them as real `PAID` payouts. **Answered
+2026-11-08** (details in the report): store accounts are purchases plus, lately,
+walk-in donations (no account wanted; the best go to the year account, the rest to
+donate); the last 3 years' unsold store stock is reported to the IRS as inventory;
+expired consignments are almost all donated but never logged (hence the ancient
+"Available" stock and small unpaid balances), with the occasional unlogged flip to
+store inventory; **Lost & Found (2834, the "biggest balance" above) is a holding
+account** — unmarked drop-offs from known account holders, proceeds moved to the
+person's account after sale, never paid out itself (now Teabox's `HOLDING` type, so
+it's out of payout obligations; its ~1,080 unclaimed migrated sales, ~$6k gross, can be
+released to the store by date once Sherry says how far back Liberty's hand-written
+deductions already settled them). Still ask: (1) did the 50/50
+payouts reach a real person or were they bookkeeping? (2) who sells the 2023–2026 bulk
+lots? (3) are the ~460 Available items on the 2016–2022 accounts still on the floor?
+Not done yet:
+flagging 3810/1/2/658 etc. as store accounts, and excluding store-account payouts from
+payout reports.
 
 ## The one rule that shapes everything
 

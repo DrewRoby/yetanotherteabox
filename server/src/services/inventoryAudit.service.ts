@@ -21,7 +21,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // Effective consignor share: the item's own split (migrated Liberty items), else the
 // account's, else 100 — the same rule as checkout (consignorShareOf). Store-owned
 // accounts (STORE type / isStoreAccount) are owed nothing whatever the split says.
-const STORE_OWNED = `(a."accountType" NOT IN ('CONSIGNOR','VENDOR','BOOTH_OWNER') OR a."isStoreAccount" = 1)`;
+// HOLDING (Lost & Found) items are someone's consignment, just not identified yet, so
+// they count as consigned — their share is owed to whoever claims them.
+const STORE_OWNED = `(a."accountType" NOT IN ('CONSIGNOR','VENDOR','BOOTH_OWNER','HOLDING') OR a."isStoreAccount" = 1)`;
 const PCT = `(CASE WHEN ${STORE_OWNED} THEN 0 ELSE COALESCE(i."consignorPercent", a."splitPercent", 100) END)`;
 
 // now = epoch ms, bound as ?1 in every query.
@@ -37,9 +39,10 @@ export const DIMENSIONS = {
     label: "Owner",
     sql: `CASE WHEN a."accountType" = 'STORE' THEN 'store'
                WHEN a."isStoreAccount" = 1 THEN 'store-account'
+               WHEN a."accountType" = 'HOLDING' THEN 'holding'
                WHEN ${PCT} = 0 THEN 'consigned-0'
                ELSE 'consigned' END`,
-    order: ["consigned", "consigned-0", "store-account", "store"],
+    order: ["consigned", "consigned-0", "holding", "store-account", "store"],
   },
   expired: {
     label: "Consignment",

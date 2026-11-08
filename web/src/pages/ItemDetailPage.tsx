@@ -204,10 +204,18 @@ export function ItemDetailPage() {
             </div>
             <div>
               <div className="font-bold">{accountLabel(item.account)}</div>
-              <div className="text-[11px] text-crimson font-bold">{item.account.accountType}</div>
+              <div className="text-[11px] text-crimson font-bold">
+                {item.account.accountType === "HOLDING" ? "LOST & FOUND" : item.account.accountType}
+              </div>
             </div>
           </div>
-          {item.account.splitPercent != null && (
+          {item.account.accountType === "HOLDING" && (
+            <p className="text-xs text-gray-600 mb-3">
+              Owner not known yet. When you find out whose this was, claim it for their account from the Lost &amp; Found
+              account's "Waiting to be claimed" list — they're credited then if it has sold.
+            </p>
+          )}
+          {item.account.splitPercent != null && item.account.accountType !== "HOLDING" && (
             <div className="text-sm border-l-2 border-gold pl-3 space-y-1">
               <div className="flex justify-between">
                 <strong>Split:</strong>

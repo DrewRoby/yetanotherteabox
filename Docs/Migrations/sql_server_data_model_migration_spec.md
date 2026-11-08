@@ -1,4 +1,4 @@
-<!-- migration-spec-freshness: schema.prisma=92d4c4da enums.ts=3fd31e7e -->
+<!-- migration-spec-freshness: schema.prisma=2b9d6a5a enums.ts=40550fdf -->
 # Teabox Consignment — Data Model Migration Spec (SQL Server source)
 
 Status: **living document**. Update this file whenever the Prisma schema
@@ -69,10 +69,10 @@ it doesn't exactly match one of these (case-sensitive):
 | Teabox set | Values | Source (`enums.ts`) |
 |---|---|---|
 | `Role` | `SYSTEM_ADMIN`, `OWNER`, `MANAGER`, `EMPLOYEE`, `REGISTER`, `CONSIGNOR`, `VENDOR`, `DONOR`, `BOOTH_OWNER` | `ROLES` |
-| `AccountType` | `CONSIGNOR`, `VENDOR`, `DONOR`, `BOOTH_OWNER`, `STORE` | `ACCOUNT_TYPES` |
+| `AccountType` | `CONSIGNOR`, `VENDOR`, `DONOR`, `BOOTH_OWNER`, `STORE`, `HOLDING` | `ACCOUNT_TYPES` |
 | `ItemStatus` | `PENDING`, `AVAILABLE`, `SOLD`, `DONATED`, `DISPOSED`, `RETURNED` | `ITEM_STATUSES` |
 | `PayoutStatus` | `REQUESTED`, `APPROVED`, `PAID`, `REJECTED` | `PAYOUT_STATUSES` |
-| Balance-bearing account types | `CONSIGNOR`, `VENDOR`, `BOOTH_OWNER` (never `DONOR`/`STORE`) | `BALANCE_BEARING_ACCOUNT_TYPES` |
+| Balance-bearing account types | `CONSIGNOR`, `VENDOR`, `BOOTH_OWNER` (never `DONOR`/`STORE`/`HOLDING`) | `BALANCE_BEARING_ACCOUNT_TYPES` |
 
 Build an explicit **crosswalk table** (source value → Teabox value) for every one of
 these before transforming a single row — do not assume the source uses the same
@@ -420,13 +420,13 @@ beyond `NOT NULL` and `UNIQUE`) / migration guidance.
 
 One `Store` row per physical location (§2).
 
-### 4.2 `Account` (polymorphic — Consignor/Vendor/Donor/BoothOwner/Store)
+### 4.2 `Account` (polymorphic — Consignor/Vendor/Donor/BoothOwner/Store/Holding)
 
 | Field | Type | Constraints | Notes |
 |---|---|---|---|
 | `id` | `String` (cuid) | PK | Fresh cuid. |
 | `storeId` | `String` | FK, required | |
-| `accountType` | `String` | must be one of `ACCOUNT_TYPES` | See §3 crosswalk. |
+| `accountType` | `String` | must be one of `ACCOUNT_TYPES` | See §3 crosswalk. **`HOLDING`** = a Lost & Found bucket: goods an account holder dropped off unmarked, sold under it and credited to the person once known (in Liberty, by a hand-written Deduction naming them). Not balance-bearing, so **`currentBalance` must be `0`** (validated) — what's waiting is derived from its unpaid sales. Historical `Payout` rows may stay (Liberty paid its lost & found out three times). Hidden Treasures: client 101550 (account 2834), confirmed by the owner 2026-11-08; `liberty-etl` lists such clients in `transform/account.ts`'s `HOLDING_CLIENT_IDS`. |
 | `isStoreAccount` | `Boolean` | default `false`; only meaningful on `CONSIGNOR`/`VENDOR`/`BOOTH_OWNER` | Marks one of the shop's *own* accounts kept separate from the single built-in `STORE` account (e.g. Liberty's per-year "20XX Inventory" buckets). Store-owned rules apply — `isBalanceBearing()` (`server/src/services/accounts.service.ts`) is false, so no balance credits, no new payouts, balance stripped from the API — **so `currentBalance` must be `0`** (validated). Historical `Payout` rows on a flagged account are fine and stay visible. Lists under the Accounts page's Store tab. |
 | `name` | `String` | required | Person/business/booth display name. |
 | `email` | `String?` | optional, no uniqueness constraint at DB level | Note: this is **separate** from `User.email` (which *is* unique) — an `Account` (the financial party) and a `User` (a login) are different rows even when the same person is both. Don't conflate them during migration; see §4.3. |

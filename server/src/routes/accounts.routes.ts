@@ -14,6 +14,7 @@ import {
   nextPayoutNumber,
   serializeAccount,
 } from "../services/accounts.service";
+import { ClaimError, claimHeldItems, listUnclaimed } from "../services/holding.service";
 
 export const accountsRouter = Router();
 accountsRouter.use(authenticate);
@@ -235,6 +236,45 @@ accountsRouter.get(
     res.json({ ...serializeAccount(account), items, payouts });
   }
 );
+
+const unclaimedQuerySchema = z.object({
+  q: z.string().trim().min(1).optional(),
+  show: z.enum(["all", "sold", "floor"]).default("all"),
+  soldBefore: dateParam.optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(200).default(25),
+});
+
+// A HOLDING (Lost & Found) account's items still waiting for their owner — see
+// services/holding.service.ts for what counts.
+accountsRouter.get("/:id/unclaimed", requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER", "EMPLOYEE"), async (req, res) => {
+  const parsed = unclaimedQuerySchema.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const account = await prisma.account.findFirst({ where: { id: req.params.id, storeId: req.session!.storeId } });
+  if (!account) return res.status(404).json({ error: "Account not found" });
+  if (account.accountType !== "HOLDING") return res.status(400).json({ error: "Only Lost & Found (holding) accounts have items to claim" });
+  res.json(await listUnclaimed(account, parsed.data));
+});
+
+const claimSchema = z.union([
+  z.object({ accountId: z.string().min(1), itemIds: z.array(z.string().min(1)).min(1).max(5000) }).strict(),
+  z.object({ accountId: z.string().min(1), soldBefore: dateParam }).strict(),
+]);
+
+// Claim items off a HOLDING account for their owner (crediting any sales), or for the
+// store to release unclaimed sales. Manager+, same as moving an item between accounts.
+accountsRouter.post("/:id/claims", requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER"), async (req, res) => {
+  const parsed = claimSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const { accountId, ...selection } = parsed.data;
+  try {
+    res.json(await claimHeldItems(req.session!, req.params.id, accountId, selection));
+  } catch (err) {
+    if (err instanceof ClaimError) return res.status(err.status).json({ error: err.message });
+    console.error("claim failed", err); // Express 4 won't catch a rejected async handler
+    res.status(500).json({ error: "Couldn't claim the items — nothing was changed" });
+  }
+});
 
 const createAccountSchema = z.object({
   accountType: z.enum(ACCOUNT_TYPES),

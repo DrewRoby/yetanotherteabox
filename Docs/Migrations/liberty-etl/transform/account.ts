@@ -19,7 +19,7 @@ export interface AccountLookups {
 
 export interface TransformedAccount {
   libertyClientId: number;
-  accountType: "CONSIGNOR" | "VENDOR";
+  accountType: "CONSIGNOR" | "VENDOR" | "HOLDING";
   isStoreAccount: boolean;
   isActive: boolean;
   name: string;
@@ -31,6 +31,13 @@ export interface TransformedAccount {
   currentBalance: number;
   createdAt: Date | null; // null => let the DB default (now) apply
 }
+
+// Liberty clients that are really Teabox HOLDING accounts (see server/src/lib/enums.ts):
+// a Lost & Found bucket for goods an account holder dropped off unmarked — sold under
+// it, then credited to the person once known (in Liberty, by a hand-written Deduction
+// naming them). Never owed or paid out itself. Confirmed by the owner 2026-11-08:
+// 101550 "lost & found" (account 2834).
+export const HOLDING_CLIENT_IDS = new Set([101550]);
 
 function concatAddress(addr: AddressFields): string | null {
   const parts = [addr.ADDRESS_1, addr.ADDRESS_2, [addr.CITY, addr.STATE, addr.ZIP].filter(Boolean).join(", ")]
@@ -57,7 +64,7 @@ export function transformClientToAccount(client: LibertyClientRow, lookups: Acco
 
   return {
     libertyClientId: client.CLIENT_ID,
-    accountType: client.CLIENT_TYPE_ID === 2 ? "VENDOR" : "CONSIGNOR",
+    accountType: HOLDING_CLIENT_IDS.has(client.CLIENT_ID) ? "HOLDING" : client.CLIENT_TYPE_ID === 2 ? "VENDOR" : "CONSIGNOR",
     // Liberty "Store Account" (type 3): the shop's own buckets (per-year "20XX
     // Inventory", "Hidden Treasures 2019", ...). Store-owned in Teabox: no balance.
     isStoreAccount: client.CLIENT_TYPE_ID === 3,
@@ -74,7 +81,12 @@ export function transformClientToAccount(client: LibertyClientRow, lookups: Acco
     // Store accounts are never owed money (Teabox's isBalanceBearing rule), so their
     // Liberty ledger balances — some sizable, e.g. ~$24k on "2006 Inventory" — are
     // dropped rather than carried as a debt to the shop itself.
-    currentBalance: client.CLIENT_TYPE_ID === 3 ? 0 : lookups.balanceByClientId.get(client.CLIENT_ID) ?? 0,
+    // Holding accounts likewise: what's waiting to be claimed is derived from their
+    // unpaid sales in Teabox, not carried as a balance.
+    currentBalance:
+      client.CLIENT_TYPE_ID === 3 || HOLDING_CLIENT_IDS.has(client.CLIENT_ID)
+        ? 0
+        : lookups.balanceByClientId.get(client.CLIENT_ID) ?? 0,
     // When the client was opened in Liberty, not when the migration ran. ~38% of
     // Hidden Treasures clients share CREATE_TS 2002-08-23 00:00 (the earliest value —
     // apparently when existing records were first loaded into Liberty); kept as-is,

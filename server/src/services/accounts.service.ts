@@ -69,11 +69,14 @@ export async function unpaidSalesOf(accountId: string) {
     where: { accountId, status: "PAID" },
     orderBy: { createdAt: "desc" },
   });
+  const floor = lastPaid ? lastPaid.paidAt ?? lastPaid.createdAt : null;
   return prisma.sale.findMany({
     where: {
       item: { accountId },
       payoutLines: { none: {} },
-      ...(lastPaid ? { saleDate: { gt: lastPaid.paidAt ?? lastPaid.createdAt } } : {}),
+      // A sale claimed off a HOLDING account after the floor counts too, however old
+      // the sale itself is — its credit only reached this account at claim time.
+      ...(floor ? { OR: [{ saleDate: { gt: floor } }, { item: { claimedAt: { gt: floor } } }] } : {}),
     },
     include: {
       item: {

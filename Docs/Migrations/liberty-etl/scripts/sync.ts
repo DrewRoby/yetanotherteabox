@@ -347,6 +347,13 @@ async function reconcile(dry: boolean) {
     for (const f of ["name", "phone", "email", "mailingAddress"] as const) {
       if ((existing[f] ?? null) !== (t[f] ?? null)) data[f] = t[f];
     }
+    // The one type change sync makes: a client the owner confirmed as a holding
+    // account (transform/account.ts HOLDING_CLIENT_IDS) becomes HOLDING. Its balance
+    // goes to 0 in the balance pass below (holding accounts aren't balance-bearing).
+    if (t.accountType === "HOLDING" && existing.accountType !== "HOLDING") {
+      data.accountType = "HOLDING";
+      existing.accountType = "HOLDING"; // so the balance pass below already treats it as one
+    }
     if (Object.keys(data).length) {
       accountUpdates.push({ id: existing.id, data });
       note("accounts updated", `${existing.name}: ${Object.keys(data).join(", ")}`);

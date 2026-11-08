@@ -23,6 +23,7 @@ const VALUE_LABELS: Partial<Record<Dimension, Record<string, string>>> = {
   owner: {
     consigned: "Consigned",
     "consigned-0": "Consigned, 100% to store",
+    holding: "Lost & Found (owner not yet known)",
     "store-account": "Store account (e.g. yearly inventory)",
     store: "Store (built-in)",
   },

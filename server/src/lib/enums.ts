@@ -20,10 +20,16 @@ export type Role = (typeof ROLES)[number];
 export const STAFF_ROLES: Role[] = ["SYSTEM_ADMIN", "OWNER", "MANAGER", "EMPLOYEE"];
 export const ACCOUNT_SCOPED_ROLES: Role[] = ["CONSIGNOR", "VENDOR", "DONOR", "BOOTH_OWNER"];
 
-export const ACCOUNT_TYPES = ["CONSIGNOR", "VENDOR", "DONOR", "BOOTH_OWNER", "STORE"] as const;
+// HOLDING = a Lost & Found-style account: goods dropped off by someone who has (or
+// will have) an account of their own but didn't mark them. Its items sell normally,
+// but a sale credits nobody and the account is never paid out; staff claim each item
+// for its real owner, who is credited then (claimHeldItems in
+// services/accounts.service.ts). No login role maps to it.
+export const ACCOUNT_TYPES = ["CONSIGNOR", "VENDOR", "DONOR", "BOOTH_OWNER", "STORE", "HOLDING"] as const;
 export type AccountType = (typeof ACCOUNT_TYPES)[number];
 
 // Donor accounts are never owed money — enforced wherever balances/payouts render or post.
+// HOLDING isn't either: its sales are owed to whoever claims them, not to the account.
 export const BALANCE_BEARING_ACCOUNT_TYPES: AccountType[] = ["CONSIGNOR", "VENDOR", "BOOTH_OWNER"];
 
 export const ITEM_STATUSES = ["PENDING", "AVAILABLE", "SOLD", "DONATED", "DISPOSED", "RETURNED"] as const;

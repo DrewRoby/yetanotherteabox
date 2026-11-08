@@ -5,6 +5,7 @@ import { useAuth } from "../auth/AuthContext";
 import { Badge, Button, Card } from "../components/Card";
 import { AccountItems } from "./accounts/AccountItems";
 import { AccountPayouts } from "./accounts/AccountPayouts";
+import { HeldItems } from "./accounts/HeldItems";
 import { formatDate, localDayStartMs, money } from "./accounts/format";
 import { Pager, rangeLabel } from "../components/Pager";
 import { accountLabel, itemNo } from "../lib/itemNumber";
@@ -34,7 +35,10 @@ const TABS = [
   { type: "DONOR", label: "Donors" },
   { type: "BOOTH_OWNER", label: "Booth Owners" },
   { type: "STORE", label: "Store" },
+  // HOLDING: Lost & Found — unmarked drop-offs, claimed for their owner later (HeldItems).
+  { type: "HOLDING", label: "Lost & Found" },
 ];
+const typeBadge = (accountType: string) => (accountType === "HOLDING" ? "LOST & FOUND" : accountType);
 
 const CAN_CREATE_ROLES = ["SYSTEM_ADMIN", "OWNER", "MANAGER"];
 
@@ -178,7 +182,7 @@ function AccountList() {
 
   const canCreate = user ? CAN_CREATE_ROLES.includes(user.activeRole) : false;
   const canBulkEdit = canCreate; // same roles as the account page's Inactive checkbox
-  const showsBalance = tab !== "DONOR" && tab !== "STORE";
+  const showsBalance = tab !== "DONOR" && tab !== "STORE" && tab !== "HOLDING";
   const columnCount = (showsBalance ? 7 : 5) + (selecting ? 1 : 0);
 
   // ---- selection ----
@@ -313,6 +317,12 @@ function AccountList() {
       {tab === "DONOR" && (
         <p className="text-xs text-gray-500 mb-4">
           Donor accounts have no balance or payouts — they are not owed money for donated items.
+        </p>
+      )}
+      {tab === "HOLDING" && (
+        <p className="text-xs text-gray-500 mb-4">
+          Lost &amp; Found accounts hold goods dropped off without being marked as anyone's. Their sales credit nobody until
+          the items are claimed for their owner's account (open the account to claim them); they are never paid out.
         </p>
       )}
 
@@ -578,7 +588,7 @@ function AccountDetail({ id }: { id: string }) {
         <div>
           <h2 className="text-2xl font-bold">{accountLabel(account)}</h2>
           <div className="flex gap-2 items-center">
-            <Badge>{account.accountType}</Badge>
+            <Badge>{typeBadge(account.accountType)}</Badge>
             {account.isStoreAccount && <Badge tone="warning">Store account</Badge>}
             {!account.isActive && <Badge>Inactive</Badge>}
           </div>
@@ -649,6 +659,8 @@ function AccountDetail({ id }: { id: string }) {
       </Card>
 
       <AccountReports account={account} />
+
+      {account.accountType === "HOLDING" && <HeldItems accountId={id} onChanged={reload} />}
 
       {(showsBalance || account.payoutCount > 0) && (
         <AccountPayouts accountId={id} payoutCount={account.payoutCount} version={version} />

@@ -31,8 +31,8 @@ no shared package).
 - `User` — auth identity only (email/passwordHash/name, plus `badgeCodeHash`/`badgeIssuedAt` for sign-in-sheet badges — see "Sign-in-sheet badges" below). Never carries roles directly.
 - `UserRole` — `(userId, role, storeId, accountId?)`. One row per role a person holds; a user with both `MANAGER` and `CONSIGNOR` rows still only acts as one per session. `accountId` set for account-scoped roles (Consignor/Vendor/Donor/Booth Owner) — links the grant to the `Account` it acts on.
 - `Store` — one per shop. `itemPrefix`/`itemStartNumber` drive new item tags (see "Barcode values").
-- `Account` — polymorphic party items/payouts attach to: `accountType ∈ {CONSIGNOR, VENDOR, DONOR, BOOTH_OWNER, STORE}`. Every store has exactly one `STORE`-type account (store-owned inventory) so intake always has a target. `isStoreAccount` flags *additional* store-owned accounts (a shop's per-year "2019 Inventory" buckets, kept separate for their history) under an ordinary `CONSIGNOR`/`VENDOR`/`BOOTH_OWNER` type. **`isBalanceBearing()` (`src/services/accounts.service.ts`) is the one rule for "is this account owed money"** — balance-bearing type *and* not flagged; checkout credits, payouts, `serializeAccount()`'s balance stripping (Donor/Store/flagged — removed from the API response, not just hidden in the UI) and the dashboard's pending-payout total (`BALANCE_BEARING_WHERE`) all use it. Don't test `BALANCE_BEARING_ACCOUNT_TYPES` alone. `isActive` = dormant flag (see "Active flag" under Accounts). `lastSaleAt` is denormalized (see Accounts). `accountNumber` (`@@unique([storeId, accountNumber])`) is the number staff know an account by and `nextItemNumber` its item-tag counter — see "Account and tag numbers". `mailingAddress` (free text, like `Store.location`) and `paymentMethod` have **no current write path** — populated only by direct SQL (e.g. a migration), not reachable via any route or UI today.
-- `Item` — `accountId` is **required** (no intake without an account). `status ∈ {PENDING, AVAILABLE, SOLD, DONATED, DISPOSED, RETURNED}`. `cost` (acquisition cost basis) has **no current write path**, same as `consignmentType`. `sku` is also the barcode value (see below) — POS scan lookup, the printed tag, and the web `Barcode` component all key off it. `itemNumber` (`@@unique([storeId, itemNumber])`) is the number encoded in `sku` — see "Barcode values" for the invariant. `tagAccountNumber`/`accountItemNumber` are the human item number "4545-12" — see "Account and tag numbers". `soldAt`/`paidOutAt` are denormalized latest sale/payout dates for list sorting (see "Item lists").
+- `Account` — polymorphic party items/payouts attach to: `accountType ∈ {CONSIGNOR, VENDOR, DONOR, BOOTH_OWNER, STORE, HOLDING}` (`HOLDING` = Lost & Found — see "Lost & Found" under Accounts). Every store has exactly one `STORE`-type account (store-owned inventory) so intake always has a target. `isStoreAccount` flags *additional* store-owned accounts (a shop's per-year "2019 Inventory" buckets, kept separate for their history) under an ordinary `CONSIGNOR`/`VENDOR`/`BOOTH_OWNER` type. **`isBalanceBearing()` (`src/services/accounts.service.ts`) is the one rule for "is this account owed money"** — balance-bearing type *and* not flagged; checkout credits, payouts, `serializeAccount()`'s balance stripping (Donor/Store/flagged — removed from the API response, not just hidden in the UI) and the dashboard's pending-payout total (`BALANCE_BEARING_WHERE`) all use it. Don't test `BALANCE_BEARING_ACCOUNT_TYPES` alone. `isActive` = dormant flag (see "Active flag" under Accounts). `lastSaleAt` is denormalized (see Accounts). `accountNumber` (`@@unique([storeId, accountNumber])`) is the number staff know an account by and `nextItemNumber` its item-tag counter — see "Account and tag numbers". `mailingAddress` (free text, like `Store.location`) and `paymentMethod` have **no current write path** — populated only by direct SQL (e.g. a migration), not reachable via any route or UI today.
+- `Item` — `accountId` is **required** (no intake without an account). `status ∈ {PENDING, AVAILABLE, SOLD, DONATED, DISPOSED, RETURNED}`. `cost` (acquisition cost basis) has **no current write path**, same as `consignmentType`. `sku` is also the barcode value (see below) — POS scan lookup, the printed tag, and the web `Barcode` component all key off it. `itemNumber` (`@@unique([storeId, itemNumber])`) is the number encoded in `sku` — see "Barcode values" for the invariant. `tagAccountNumber`/`accountItemNumber` are the human item number "4545-12" — see "Account and tag numbers". `soldAt`/`paidOutAt` are denormalized latest sale/payout dates for list sorting (see "Item lists"). `claimedAt` = when the item was claimed off a Lost & Found account (see Accounts).
 - `ItemHistory`, `Photo`, `Sale`, `Device`, `Heartbeat` — as named.
 - `Payout` — `payoutNumber` is the human-facing "Payout #" (migrated payouts keep the source system's number; new ones `nextPayoutNumber()`).
 - `PayoutLine` — itemization of a `Payout`; a `Sale` with a line counts as paid out. See "Accounts" below.
@@ -272,6 +272,25 @@ types, and flagging is **refused (409) while `currentBalance` ≠ 0**: going fro
 owe $X" to "nobody is owed anything" must go through a payout, not a checkbox. A
 flagged account keeps its historical payouts (`GET /:id` returns payouts for every
 account).
+
+**Lost & Found (`HOLDING` accounts, `services/holding.service.ts`, 2026-11-08).** For goods an
+account holder dropped off without marking them (Hidden Treasures' Liberty client 101550,
+account 2834). Not balance-bearing: a sale credits nobody and the account can't be paid out.
+What's waiting is *derived*, not a balance: items still on the floor, plus SOLD items with
+a sale > $0 that no `PayoutLine` covers (migrated sales Liberty swept into payouts, and $0
+donation close-outs, are settled). `GET /:id/unclaimed?q=&show=all|sold|floor&soldBefore=&page=&pageSize=`
+(staff) lists them with totals; `POST /:id/claims { accountId, itemIds | soldBefore }`
+(Manager+) moves them to the owner's account, stamps `Item.claimedAt`, and credits each
+claimable sale's share (`item.consignorPercent ?? target.splitPercent`, the checkout rule)
+when the target is balance-bearing — claiming for the store is how a sale nobody will
+claim is released (`soldBefore` does that in bulk). One `EDIT` history entry and one
+`CLAIM_HELD_ITEM` audit entry per item. `unpaidSalesOf()` counts a sale whose item was
+claimed after the owner's latest payout even when the sale itself is older, so the next
+payout itemizes it. Both reads are raw SQL with `NOT EXISTS` on `PayoutLine` — Prisma's
+`payoutLines: { none: {} }` is a `NOT IN` over every PayoutLine (5s → ~120ms). The
+Inventory Audit counts holding items as consigned (owner value `holding`). Liberty-side:
+`liberty-etl`'s `HOLDING_CLIENT_IDS` (`transform/account.ts`) maps the client, and `sync`
+converts an existing account in place.
 
 **Item lists** (`services/itemList.service.ts`): one filtered/sorted/paged query behind
 both the Inventory page (`GET /items/browse`, whole store) and an account's Items table
