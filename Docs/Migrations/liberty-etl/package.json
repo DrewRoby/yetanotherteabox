@@ -1,6 +1,6 @@
 {
   "name": "liberty-etl",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "description": "One-time migration tool: Liberty by ResaleWorld (SQL Server) -> Teabox (Prisma/SQLite). Not shipped product code — see Docs/Migrations/sql_server_data_model_migration_spec.md.",
   "type": "commonjs",

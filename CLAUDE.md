@@ -34,6 +34,7 @@ this was clarified (2026-11-07).
 | `*_document.md`, `tasks.json` | Original spec. Consult before adding features not yet built (e.g. marketplace) to check intended shape. |
 | `Docs/Migrations/` | Living specs for migrating another shop's data into Teabox — `sql_server_data_model_migration_spec.md` (first source: Liberty by ResaleWorld) plus `liberty-etl/` (the actual profiling/transform/load tool, not shipped product code). Update the spec alongside `schema.prisma`/`enums.ts` changes that affect what a migration must produce, then run `cd server && npm run check:migration-spec -- --write` to re-stamp it (plain `npm run check:migration-spec` fails if the spec is stale relative to those two files). `liberty-etl/README.md` covers running it on Windows against a native SQL Server Express restore. `dist-bin/teabox.db` holds Hidden Treasures' real data migrated from Liberty (last fully re-migrated 2026-11-07 from the 2026-11-04 backup), but it is **a development database, not production** — see "Project status" below. Schema changes can be applied in place (`prisma migrate deploy`) or by re-migrating; copy the old file into `dist-bin/arch/` first either way. |
 | `Docs/sync-design.md` | How syncing works today (Liberty → Teabox reconcile) and the recommended path for the cloud: snapshot backups for DR, an outbox journal for the Phase 3 aggregate, and a reconcile pass as the safety net. Read before building any sync/backup. |
+| `Docs/cv-intake-design.md` | Draft design (2026-11-20, not built) for real photo capture, Claude-vision field suggestions and photos-first batch "auto-intake", replacing the `adapters/cv.ts` stub. Phased: photos → suggestions (model chosen by an eval over real photographed intakes) → batch review grid. Read before touching intake photos or vision. |
 | `RELEASE_NOTES-v020.md` | Per-version notes, newest first (Drew's file, with his own annotations — the 0.2.0 notes; was `RELEASE_NOTES.md`). The version lives in `server/`, `web/` and `liberty-etl`'s `package.json` + `package-lock.json` (bump all three together: `npm version <x.y.z> --no-git-tag-version` in each); the web build shows it in the sidebar footer. **Bump the patch number once per working session** (see "Versioning" below). |
 | `.claude/launch.json` | Dev servers for the preview tools: `server`/`web` (:4000/:5173) and `server-alt`/`web-alt` (:4001/:5174 — `web`'s Vite proxy honors `API_PROXY_TARGET`), so a dev stack can run beside a `teabox.exe` holding :4000. Point `server-alt` at a scratch DB with `DATABASE_URL` for real-data testing; never at `dist-bin/teabox.db`. |
 | `Docs/windows-test-deploy-setup.md` | Walkthrough for the Windows package: building it, where `teabox.db` actually lives, resetting to a true first run, driving setup from `config.env` instead of the wizard, and hand-generating a fresh database with `prisma migrate deploy` — including two Prisma+SQLite+Windows path gotchas found while writing it (see this file's own gotchas list below). |
@@ -94,6 +95,15 @@ Treasures cutover. Details live in `server/CLAUDE.md` / `web/CLAUDE.md`:
   Teabox with a live Liberty (the shop keeps using it until cutover) — one-way,
   idempotent, conflicts reported rather than overwritten; every applied run is a
   `SyncRun` row. Design + the recommended cloud path: `Docs/sync-design.md`.
+- **v0.2.3** (2026-11-20) — merged the Lost & Found / expiry / year-end work to
+  `master`, then drafted `Docs/cv-intake-design.md` (photo capture, Claude-vision
+  suggestions, auto-intake). Design only, no code yet. Profiling the dev DB for it showed
+  Hidden Treasures' field convention: `description` holds the brand, `brand` holds the
+  item type (Liberty's "Brand" attribute), and `subcategory` is the department.
+  Researched providers and cameras for it, and added the decisions to the doc
+  (§4.1a, §5.3a): a USB document camera on the Teabox PC; start with Claude Haiku; skip
+  fashion-only taggers and hourly-billed trainable services; and a local classifier
+  (Phase E) once Phase A has collected photos.
 - **v0.2.2** (2026-11-08) — what Liberty's store "inventory" accounts really are
   (shop purchases + walk-in donations, not expired consignments; no year-to-year
   carry-over; 50/50 store stock produced real payouts — see
