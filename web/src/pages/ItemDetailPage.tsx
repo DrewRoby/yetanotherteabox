@@ -7,6 +7,7 @@ import { Barcode } from "../components/Barcode";
 import { AccountPicker, type AccountOption } from "../components/AccountPicker";
 import { money as formatMoney } from "./accounts/format";
 import { accountLabel, itemNo } from "../lib/itemNumber";
+import { ACQUISITION_LABELS, acquisitionLabel } from "../lib/acquisition";
 
 interface ItemDetail {
   id: string;
@@ -27,6 +28,11 @@ interface ItemDetail {
   price: number;
   priceQuickSale: number | null;
   pricePremium: number | null;
+  consignmentType: string | null; // how the store got it (lib/acquisition.ts)
+  cost: number | null;
+  donatedAt: string | null;
+  flippedAt: string | null;
+  flippable: "donated" | "expired" | null; // server: services/expiry.service.ts flipReason
   account: {
     id: string;
     accountNumber: number | null;
@@ -112,6 +118,23 @@ export function ItemDetailPage() {
       setNotice(`Tag for ${itemNo(item)} sent to the printer.`);
     });
 
+  // Flip to store inventory: a donated item that's still here, or an expired
+  // consignment the store is keeping (server: POST /items/:id/flip-to-store).
+  const flip = () => {
+    const what =
+      item.flippable === "donated"
+        ? "This item is marked donated. Put it back on the floor as store inventory?"
+        : `${item.account.name}'s consignment has expired. Keep it as store inventory?`;
+    if (!window.confirm(`${what}
+
+It moves to the store's own account, so a sale credits nobody. Its tag stays the same.`)) return;
+    run(async () => {
+      await api.post(`/items/${item.id}/flip-to-store`, {});
+      setNotice(`${itemNo(item)} is now store inventory.`);
+      load();
+    });
+  };
+
   const remove = () => {
     if (!window.confirm(`Delete "${item.description}" (${itemNo(item)})? This can't be undone.`)) return;
     run(async () => {
@@ -133,6 +156,11 @@ export function ItemDetailPage() {
         <Button variant="outline" onClick={reprint} disabled={busy || editing}>
           Reprint Tag
         </Button>
+        {isStaff && item.flippable && !editing && (
+          <Button variant="secondary" onClick={flip} disabled={busy}>
+            Flip to Store Inventory
+          </Button>
+        )}
         {isManagerUp && !editing && (
           <span title={hasFinancialRecords ? "Items with sale or payout records can't be deleted" : undefined}>
             <Button variant="secondary" onClick={remove} disabled={busy || hasFinancialRecords}>
@@ -285,6 +313,17 @@ function ItemView({ item }: { item: ItemDetail }) {
             <Field key={f.key} label={f.label} value={(item[f.key] as string | null) || "—"} />
           ))}
           <Field label="Received" value={date(item.intakeDate)} />
+          {(item.consignmentType || item.cost != null) && (
+            <Field
+              label="Store got it"
+              value={
+                acquisitionLabel(item.consignmentType) +
+                (item.flippedAt ? ` (${date(item.flippedAt)})` : "") +
+                (item.cost != null ? ` · cost ${money(item.cost)}` : "")
+              }
+            />
+          )}
+          {item.donatedAt && <Field label="Donated" value={date(item.donatedAt)} />}
         </div>
       </section>
 
@@ -334,8 +373,11 @@ function EditItemForm({
     accountType: item.account.accountType,
     isStoreAccount: false,
   });
+  const [acquired, setAcquired] = useState(item.consignmentType ?? "");
+  const [cost, setCost] = useState(item.cost == null ? "" : String(item.cost));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const costInvalid = cost.trim() !== "" && !(Number(cost) >= 0);
 
   const priceErrors = PRICE_FIELDS.filter((f) => {
     const v = prices[f.key].trim();
@@ -343,7 +385,7 @@ function EditItemForm({
     return !(Number(v) > 0);
   });
   const textErrors = TEXT_FIELDS.filter((f) => f.required && !text[f.key].trim());
-  const valid = priceErrors.length === 0 && textErrors.length === 0;
+  const valid = priceErrors.length === 0 && textErrors.length === 0 && !costInvalid;
 
   async function save() {
     // Only send what changed; the server records each change in the item's history.
@@ -361,6 +403,11 @@ function EditItemForm({
     }
     if (!sold && status !== item.status) body.status = status;
     if (!sold && canChangePriceAndAccount && account.id !== item.account.id) body.accountId = account.id;
+    if (canChangePriceAndAccount) {
+      if ((acquired || null) !== item.consignmentType) body.consignmentType = acquired || null;
+      const nextCost = cost.trim() === "" ? null : Number(cost);
+      if (nextCost !== item.cost) body.cost = nextCost;
+    }
     if (Object.keys(body).length === 0) return onSaved(false);
 
     setError(null);
@@ -455,10 +502,31 @@ function EditItemForm({
         </div>
       </div>
 
-      {(priceErrors.length > 0 || textErrors.length > 0) && (
+      {canChangePriceAndAccount && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
+          <div>
+            <label className={label}>How the store got it</label>
+            <select value={acquired} onChange={(e) => setAcquired(e.target.value)} className={input}>
+              <option value="">— (consigned / not recorded)</option>
+              {Object.keys(ACQUISITION_LABELS).map((v) => (
+                <option key={v} value={v}>
+                  {acquisitionLabel(v)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className={label}>Cost to the store</label>
+            <input type="number" min="0" step="0.01" value={cost} onChange={(e) => setCost(e.target.value)} className={input} />
+          </div>
+        </div>
+      )}
+
+      {(priceErrors.length > 0 || textErrors.length > 0 || costInvalid) && (
         <p className="text-crimson text-xs mb-2">
           {textErrors.length > 0 && `${textErrors.map((f) => f.label).join(", ")} can't be blank. `}
-          {priceErrors.length > 0 && `${priceErrors.map((f) => f.label).join(", ")}: enter an amount above $0.`}
+          {priceErrors.length > 0 && `${priceErrors.map((f) => f.label).join(", ")}: enter an amount above $0. `}
+          {costInvalid && "Cost: enter $0 or more."}
         </p>
       )}
       {error && <p className="text-crimson text-sm mb-2">{error}</p>}

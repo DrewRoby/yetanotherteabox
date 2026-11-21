@@ -649,10 +649,7 @@ function StatementView({
       {s.payouts.length === 0 && (
         <Card className="text-gray-400">No payouts in this period.</Card>
       )}
-      {s.payouts
-        .slice()
-        .reverse()
-        .map((p) => (
+      {s.payouts.map((p) => ( // newest first, as the server sends them
           <Card key={p.id}>
             <div className="flex justify-between items-baseline mb-2">
               <div className="font-bold">

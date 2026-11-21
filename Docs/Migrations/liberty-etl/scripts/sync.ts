@@ -267,7 +267,10 @@ async function reconcile(dry: boolean) {
     ...(
       await prisma.$queryRawUnsafe(`
         SELECT DISTINCT h."itemId" AS id FROM "ItemHistory" h WHERE h."changedById" IS NOT NULL
-        UNION SELECT "id" FROM "Item" WHERE "auditAppliedAt" IS NOT NULL`)
+        UNION SELECT "id" FROM "Item" WHERE "auditAppliedAt" IS NOT NULL
+        -- automatic donations (no changedById) and flips are Teabox's too: Liberty still
+        -- says Available, but sync must not put them back on the floor / owner
+        UNION SELECT "id" FROM "Item" WHERE "donatedAt" IS NOT NULL OR "flippedAt" IS NOT NULL OR "claimedAt" IS NOT NULL`)
     ).map((r: { id: string }) => r.id),
   ]);
   const tbSales: { id: string; itemNumber: number; saleDate: bigint | number; transactionId: string | null }[] =

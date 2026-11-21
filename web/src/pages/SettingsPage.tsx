@@ -80,6 +80,8 @@ interface StoreSettings {
   highestItemNumber: number; // 0 when the store has no items
   nextItemNumber: number;
   nextSku: string;
+  autoDonate: boolean;
+  autoDonated?: number; // PUT only: items donated right away when the switch was turned on
 }
 
 // Item numbering: new items get "<prefix>-<number>", numbered one past the store's
@@ -89,13 +91,15 @@ function StoreTab({ canEdit }: { canEdit: boolean }) {
   const [settings, setSettings] = useState<StoreSettings | null>(null);
   const [prefix, setPrefix] = useState("");
   const [start, setStart] = useState("");
+  const [autoDonate, setAutoDonate] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
+  const [saved, setSaved] = useState<string | null>(null);
 
   function load(next: StoreSettings) {
     setSettings(next);
     setPrefix(next.itemPrefix);
     setStart(String(next.itemStartNumber));
+    setAutoDonate(next.autoDonate);
   }
   useEffect(() => {
     api.get<StoreSettings>("/settings/store").then(load);
@@ -126,7 +130,7 @@ function StoreTab({ canEdit }: { canEdit: boolean }) {
         disabled={!canEdit}
         onChange={(e) => {
           setPrefix(e.target.value.toUpperCase());
-          setSaved(false);
+          setSaved(null);
         }}
         maxLength={8}
         className="w-40 border border-ink p-2 mb-1 font-mono disabled:bg-gray-100"
@@ -140,7 +144,7 @@ function StoreTab({ canEdit }: { canEdit: boolean }) {
         disabled={!canEdit}
         onChange={(e) => {
           setStart(e.target.value);
-          setSaved(false);
+          setSaved(null);
         }}
         className="w-40 border border-ink p-2 mb-1 disabled:bg-gray-100"
       />
@@ -153,6 +157,26 @@ function StoreTab({ canEdit }: { canEdit: boolean }) {
       <p className="text-sm mt-3 mb-4">
         Next item: <span className="font-mono font-bold">{settings.nextSku}</span>
       </p>
+
+      <h3 className="font-bold uppercase text-xs mb-1 mt-6">Unsold consignments</h3>
+      <label className="flex items-start gap-2 text-sm mb-1">
+        <input
+          type="checkbox"
+          className="mt-1"
+          checked={autoDonate}
+          disabled={!canEdit}
+          onChange={(e) => {
+            setAutoDonate(e.target.checked);
+            setSaved(null);
+          }}
+        />
+        <span>Donate automatically after 90 days</span>
+      </label>
+      <p className="text-xs text-gray-500 mb-4">
+        Consignments still unsold 90 days after intake are marked Donated on their own. If one is still on the floor, flip it to
+        store inventory from its item page — or just scan it at the register, which offers to.
+        {autoDonate && !settings.autoDonate && " Turning this on donates everything already past 90 days when you save."}
+      </p>
       {canEdit ? (
         <>
           <Button
@@ -160,8 +184,15 @@ function StoreTab({ canEdit }: { canEdit: boolean }) {
             onClick={async () => {
               setError(null);
               try {
-                load(await api.put<StoreSettings>("/settings/store", { itemPrefix: prefix, itemStartNumber: startNumber }));
-                setSaved(true);
+                const next = await api.put<StoreSettings>("/settings/store", {
+                  itemPrefix: prefix,
+                  itemStartNumber: startNumber,
+                  autoDonate,
+                });
+                load(next);
+                setSaved(
+                  next.autoDonated ? `Saved — ${next.autoDonated.toLocaleString()} expired consignments marked donated.` : "Saved."
+                );
               } catch (err) {
                 setError(err instanceof ApiError ? err.message : "Could not save.");
               }
@@ -169,11 +200,11 @@ function StoreTab({ canEdit }: { canEdit: boolean }) {
           >
             Save
           </Button>
-          {saved && <p className="text-crimson text-sm mt-2">Saved.</p>}
+          {saved && <p className="text-crimson text-sm mt-2">{saved}</p>}
           {error && <p className="text-crimson text-sm mt-2">{error}</p>}
         </>
       ) : (
-        <p className="text-xs text-gray-500">Only an Owner or Admin can change item numbering.</p>
+        <p className="text-xs text-gray-500">Only an Owner or Admin can change these settings.</p>
       )}
     </Card>
   );

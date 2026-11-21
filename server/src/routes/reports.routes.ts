@@ -2,6 +2,7 @@ import { Router } from "express";
 import { prisma } from "../lib/prisma";
 import { authenticate } from "../middleware/auth";
 import { requireRole } from "../middleware/requireRole";
+import { yearEndCsv, yearEndQuery, yearEndRows, yearEndSummary } from "../services/yearEndInventory.service";
 import { Prisma } from "@prisma/client";
 import { BALANCE_BEARING_WHERE } from "../services/accounts.service";
 import { loadPrintableItems, printItemsAsJob } from "../services/printJobs.service";
@@ -103,6 +104,38 @@ reportsRouter.get("/sales-summary/export.csv", requireRole(...REPORT_ROLES), asy
   res.setHeader("Content-Type", "text/csv");
   res.setHeader("Content-Disposition", `attachment; filename=daily-sales-${localDateKey(asOf)}.csv`);
   res.send([header, ...lines].join("\n"));
+});
+
+// Year-End Inventory (services/yearEndInventory.service.ts): store-owned items acquired in
+// the last `years` years and still on hand at the end of `date` (default: last Dec 31).
+reportsRouter.get("/year-end-inventory", requireRole(...REPORT_ROLES), async (req, res) => {
+  const parsed = yearEndQuery.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  res.json(await yearEndSummary(req.session!.storeId, parsed.data));
+});
+
+const yearEndItemsQuery = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(200).default(50),
+});
+reportsRouter.get("/year-end-inventory/items", requireRole(...REPORT_ROLES), async (req, res) => {
+  const parsed = yearEndQuery.safeParse(req.query);
+  const paging = yearEndItemsQuery.safeParse(req.query);
+  if (!parsed.success || !paging.success) {
+    return res.status(400).json({ error: (parsed.success ? paging : parsed).error!.flatten() });
+  }
+  const { rows } = await yearEndRows(req.session!.storeId, parsed.data);
+  const { page, pageSize } = paging.data;
+  res.json({ total: rows.length, rows: rows.slice((page - 1) * pageSize, page * pageSize) });
+});
+
+reportsRouter.get("/year-end-inventory/export.csv", requireRole(...REPORT_ROLES), async (req, res) => {
+  const parsed = yearEndQuery.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const { rows, asOf } = await yearEndRows(req.session!.storeId, parsed.data);
+  res.setHeader("Content-Type", "text/csv");
+  res.setHeader("Content-Disposition", `attachment; filename=year-end-inventory-${asOf}.csv`);
+  res.send(yearEndCsv(rows));
 });
 
 // Day Detail: everything sold, taken in, repriced, tag-printed and paid out on one day.

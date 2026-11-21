@@ -73,7 +73,14 @@ export function PosPage() {
       );
       addToCart(item);
     } catch (err) {
-      setScanError(err instanceof ApiError ? "No available item with that code." : "Lookup failed.");
+      // An auto-donated consignment that's still on the floor: offer to flip it to store
+      // inventory and ring it up (server: POST /items/:id/flip-to-store).
+      const donated = err instanceof ApiError && err.status === 409 ? (err.body as { donated?: PosItem } | null)?.donated : undefined;
+      if (donated) {
+        await offerFlip(donated);
+      } else {
+        setScanError(err instanceof ApiError ? "No available item with that code." : "Lookup failed.");
+      }
     } finally {
       focusScanInput();
     }
@@ -83,6 +90,24 @@ export function PosPage() {
     e.preventDefault();
     await lookupCode(scanCode);
     setScanCode("");
+  }
+
+  async function offerFlip(item: PosItem) {
+    const ok = window.confirm(
+      `${itemNo(item)} "${item.description}" is marked donated — its consignment expired.
+
+` +
+        "It's still here, so flip it to store inventory and ring it up? The store keeps the sale."
+    );
+    if (!ok) {
+      setScanError(`${itemNo(item)} is marked donated — not added.`);
+      return;
+    }
+    try {
+      addToCart(await api.post<PosItem>(`/items/${item.id}/flip-to-store`, {}));
+    } catch (err) {
+      setScanError(err instanceof ApiError ? `Couldn't flip ${itemNo(item)}: ${err.message}` : "Flip failed.");
+    }
   }
 
   function addToCart(item: PosItem) {

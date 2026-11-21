@@ -20,7 +20,8 @@ export interface AccountScopedRoleEntry {
 }
 
 export interface StoreConfig {
-  store: { name: string; location: string };
+  // autoDonate → Store.autoDonate: expired consignments become DONATED automatically.
+  store: { name: string; location: string; autoDonate?: boolean };
   // New Teabox items' tag numbering (Store.itemPrefix / itemStartNumber). "auto" =
   // the next round number above the source system's highest item number.
   items: { prefix?: string; startNumber?: number | "auto" };
@@ -82,7 +83,11 @@ export function loadStoreConfig(configPath = path.join(__dirname, "store.yaml"))
   }
 
   return {
-    store: { name: raw.store.name.trim(), location: (raw.store.location ?? "").trim() },
+    store: {
+      name: raw.store.name.trim(),
+      location: (raw.store.location ?? "").trim(),
+      ...(raw.store.autoDonate != null ? { autoDonate: raw.store.autoDonate === true } : {}),
+    },
     items,
     owner: { name: raw.owner.name.trim(), email: raw.owner.email.trim(), password: String(raw.owner.password) },
     roles,

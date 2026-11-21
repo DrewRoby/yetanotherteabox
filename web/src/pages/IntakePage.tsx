@@ -5,6 +5,7 @@ import { useAuth } from "../auth/AuthContext";
 import { Button, Card } from "../components/Card";
 import { Barcode } from "../components/Barcode";
 import { itemNo } from "../lib/itemNumber";
+import { acquisitionLabel, COSTED_ACQUISITIONS, INTAKE_ACQUISITIONS } from "../lib/acquisition";
 import { TagLabel } from "../components/TagLabel";
 import { AccountPicker, type AccountOption } from "../components/AccountPicker";
 
@@ -26,6 +27,7 @@ interface QueuedTicket {
 
 const ACCOUNT_SCOPED_ROLES = ["CONSIGNOR", "BOOTH_OWNER"];
 
+
 export function IntakePage() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -35,6 +37,10 @@ export function IntakePage() {
   // Stays selected across saves, so a whole drop-off for one consignor is entered
   // without re-picking the account each time.
   const [selectedAccount, setSelectedAccount] = useState<AccountOption | null>(null);
+  // How the store got a store-owned item (server: CONSIGNMENT_TYPES) — kept across saves
+  // like the account, so a run of walk-in donations is entered without re-picking.
+  const [acquired, setAcquired] = useState("");
+  const [cost, setCost] = useState("");
 
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState("");
@@ -60,6 +66,9 @@ export function IntakePage() {
   }, [user, isAccountScoped]);
 
   const accountReady = isAccountScoped ? !!ownAccount : !!selectedAccount;
+  const storeOwned =
+    !isAccountScoped && !!selectedAccount && (selectedAccount.accountType === "STORE" || !!selectedAccount.isStoreAccount);
+  const costed = COSTED_ACQUISITIONS.includes(acquired);
 
   async function handleCapture() {
     setCapturing(true);
@@ -97,6 +106,7 @@ export function IntakePage() {
           size: size || undefined,
           price: Number(price),
           accountId: isAccountScoped ? undefined : selectedAccount?.id,
+          ...(storeOwned ? { consignmentType: acquired, ...(costed && cost !== "" ? { cost: Number(cost) } : {}) } : {}),
         }
       );
       setResult({ sku: res.item.sku, tagNumber: itemNo(res.item) });
@@ -118,6 +128,7 @@ export function IntakePage() {
       setBrand("");
       setSize("");
       setPrice("");
+      setCost("");
       setSuggestion(null);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not save item.");
@@ -153,7 +164,7 @@ export function IntakePage() {
           <Button variant="secondary" onClick={() => navigate(-1)}>
             Discard
           </Button>
-          <Button onClick={handleSave} disabled={!accountReady || !description || !category || !price || saving}>
+          <Button onClick={handleSave} disabled={!accountReady || !description || !category || !price || (storeOwned && !acquired) || saving}>
             {saving ? "Saving…" : "Save Item"}
           </Button>
         </div>
@@ -176,10 +187,46 @@ export function IntakePage() {
           <div className="max-w-md">
             <AccountPicker
               value={selectedAccount}
-              onChange={setSelectedAccount}
+              onChange={(a) => {
+                setSelectedAccount(a);
+                setAcquired("");
+                setCost("");
+              }}
               placeholder="Search for the target account (required) — name, email or phone"
               autoFocus
             />
+          </div>
+        )}
+        {storeOwned && (
+          <div className="flex flex-wrap items-end gap-4 mt-4">
+            <div>
+              <label className="block text-[10px] font-bold uppercase text-gray-500">How did the store get it? (required)</label>
+              <select value={acquired} onChange={(e) => setAcquired(e.target.value)} className="border border-ink p-2 bg-white">
+                <option value="">Choose…</option>
+                {INTAKE_ACQUISITIONS.map((v) => (
+                  <option key={v} value={v}>
+                    {acquisitionLabel(v)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {costed && (
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-gray-500">Cost to the store (optional)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={cost}
+                  onChange={(e) => setCost(e.target.value)}
+                  className="border border-ink p-2 w-32"
+                  placeholder="0.00"
+                />
+              </div>
+            )}
+            <p className="text-[11px] text-gray-500 max-w-sm">
+              Store-owned stock records how and when the store got it — that date is what the year-end inventory counts.
+            </p>
           </div>
         )}
       </Card>

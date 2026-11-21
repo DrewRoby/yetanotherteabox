@@ -44,7 +44,22 @@ export type PayoutStatus = (typeof PAYOUT_STATUSES)[number];
 export const PAYOUT_LINE_TYPES = ["SALE", "PURCHASE", "RETURN", "DEDUCTION", "FEE", "ADVANCE", "ADJUSTMENT"] as const;
 export type PayoutLineType = (typeof PAYOUT_LINE_TYPES)[number];
 
-// Item.auditLabel — Inventory Audit classifications (src/services/inventoryAudit.service.ts).
+// Item.consignmentType — how the store came to own a store-owned item (null on a
+// consigned item, or where nobody recorded it). "Buy-Outright" and "Trade" are the
+// values liberty-etl already migrates (Liberty ITEM_ACQUISITION_TYPE Purchase/Trade);
+// "Buy-Outright" covers any purchase — from a person, a vendor or a closeout lot.
+// "Walk-in Donation" = goods left by someone who didn't want an account. "Expired
+// Consignment" = a consignment flipped to store inventory (Item.flippedAt) — set by
+// the flip, not chosen at intake.
+export const CONSIGNMENT_TYPES = ["Buy-Outright", "Trade", "Walk-in Donation", "Expired Consignment"] as const;
+export type ConsignmentType = (typeof CONSIGNMENT_TYPES)[number];
+export const INTAKE_CONSIGNMENT_TYPES: ConsignmentType[] = ["Buy-Outright", "Trade", "Walk-in Donation"];
+
+// Hidden Treasures' consignment period: unsold after this many days, a consignment is
+// the store's to donate (Store.autoDonate) or keep (flip to store inventory).
+export const CONSIGNMENT_DAYS = 90;
+
+// Item.auditLabel —Inventory Audit classifications (src/services/inventoryAudit.service.ts).
 // Applying a label: KEEP → nothing; EXPIRED_TO_STORE → item moves to the store's own
 // account; DONATE → DONATED; RETURN → RETURNED; WRITE_OFF → DISPOSED.
 export const AUDIT_LABELS = ["KEEP", "EXPIRED_TO_STORE", "DONATE", "RETURN", "WRITE_OFF"] as const;

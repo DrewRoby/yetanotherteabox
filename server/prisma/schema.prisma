@@ -29,6 +29,7 @@ model Store {
   location        String?
   itemPrefix      String   @default("TBX") // new items' SKU prefix: "<itemPrefix>-<itemNumber>" — see src/services/items.service.ts nextItemIdentity
   itemStartNumber Int      @default(1) // floor for the next new itemNumber; numbering otherwise continues from the store's highest
+  autoDonate      Boolean  @default(false) // consignments unsold after CONSIGNMENT_DAYS are marked DONATED automatically — src/services/expiry.service.ts
   createdAt       DateTime @default(now())
 
   users     UserRole[]
@@ -143,13 +144,13 @@ model Item {
   size            String?
   serialNumber    String?
   condition       String?
-  consignmentType String? // e.g. "Traditional Consignment", "Buy-Outright", "Booth Rental", "Donation"
+  consignmentType String? // how the store got a store-owned item: CONSIGNMENT_TYPES in src/lib/enums.ts ("Buy-Outright", "Trade", "Walk-in Donation", "Expired Consignment"); null = consigned / unknown
   status          String    @default("AVAILABLE")
   intakeDate      DateTime  @default(now())
   priceQuickSale  Float?
   price           Float // "standard" price — the sale price
   pricePremium    Float?
-  cost            Float? // acquisition cost basis, e.g. for buy-outright/trade items. No current write path (see server/CLAUDE.md).
+  cost            Float? // acquisition cost basis, e.g. for buy-outright/trade items — entered at intake or on the item page
   // Per-item consignor share (%), overriding Account.splitPercent at checkout/payout —
   // Liberty sets the split per item (PRICE_CODE: 50/50, 30S/70C, "100% TO STORE" = 0).
   // Null = use the account's split. No write path in the app yet (migration only).
@@ -171,6 +172,8 @@ model Item {
   // the add_item_sold_paid_dates migration for the canonical SQL.
   soldAt          DateTime?
   paidOutAt       DateTime?
+  donatedAt       DateTime? // when it was marked DONATED (by hand, Inventory Audit, or automatically at consignment expiry); cleared if flipped back
+  flippedAt       DateTime? // when an expired consignment became store inventory (consignmentType "Expired Consignment") — the store's acquisition date for it
   claimedAt       DateTime? // when this item was claimed off a HOLDING account (Lost & Found) for its real owner — lets that owner's next payout itemize a sale that predates their last payout; see claimHeldItems() in src/services/accounts.service.ts
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt

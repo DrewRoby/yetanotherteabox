@@ -1,4 +1,4 @@
-<!-- migration-spec-freshness: schema.prisma=2b9d6a5a enums.ts=40550fdf -->
+<!-- migration-spec-freshness: schema.prisma=391e8bfb enums.ts=035299a9 -->
 # Teabox Consignment — Data Model Migration Spec (SQL Server source)
 
 Status: **living document**. Update this file whenever the Prisma schema
@@ -256,7 +256,7 @@ open questions at the end of this document.
   `ITEM_UDF_STATUS_ID`/`DISCONTINUED`/`UNUSED_IND` (unused), `CLIENT.INACTIVE_TS` (3 rows).
 - `ITEM.COST` is genuinely populated (real values like `1, 3, 5, 2, 0`, not a
   default-only column) — **confirms this spec's flagged cost-basis gap is real**.
-  Added `Item.cost` (nullable `Float`) to `schema.prisma`.
+  Added `Item.cost` (nullable `Float`) to `schema.prisma`. Now writable at intake/edit for store-owned items (2026-11-08). Related: `Store.autoDonate` and `Item.donatedAt`/`flippedAt` (consignment expiry) have no Liberty source — Liberty enforced no consignment period; `store.yaml`'s `store.autoDonate` sets the flag at migration.
 - `ITEM.PRICE_CODE_ID` → `PRICE_CODE.STORE_PCT` is the split, and **it's the store's
   cut, not the consignor's** — directly confirmed from real rows: `"60S/40C"` (60%
   store/40% consignor) has `STORE_PCT = 60`; `"60C/40S"` has `STORE_PCT = 40`; `"100%
@@ -501,7 +501,7 @@ Settings → Users & Permissions (`DELETE /settings/users/roles/:userRoleId`).
 | `description` | `String` | required | |
 | `category` | `String` | required, free text (no enum) | No longer feeds SKU generation (that now comes from `itemNumber`, not `category`); purely descriptive/filterable metadata. |
 | `subcategory`, `brand`, `style`, `pattern`, `size`, `serialNumber`, `condition` | `String?` | all optional free text | Direct 1:1 mapping from whatever equivalent columns the source has; leave `null` rather than empty string for anything absent (the intake `zod` schema treats these as `optional()`, not empty-string-required). |
-| `consignmentType` | `String?` | optional free text, **no current UI surface** | Schema comment (`prisma/schema.prisma:111`) suggests values like `"Traditional Consignment"`, `"Buy-Outright"`, `"Booth Rental"`, `"Donation"` but there is **no enum enforcing this and no web page reads or writes it** (`grep` for `consignmentType` across `web/src` returns nothing) — it's accepted by the intake API (`items.routes.ts`) and stored, but otherwise dark data today. Good place to preserve the source system's original per-item deal-type label even when it doesn't map cleanly onto Teabox's account-type model (e.g. an item under a "60-day markdown consignment" deal distinct from the account's default split). |
+| `consignmentType` | `String?` | one of `CONSIGNMENT_TYPES` (`Buy-Outright`, `Trade`, `Walk-in Donation`, `Expired Consignment`) or null | **How the store got a store-owned item** (2026-11-08) — set at intake for store-owned accounts, by a flip, or by a Manager edit; null = consigned / not recorded. Liberty's `ITEM_ACQUISITION_TYPE` Purchase → `Buy-Outright`, Trade → `Trade`. Older note, kept for history: | Schema comment (`prisma/schema.prisma:111`) suggests values like `"Traditional Consignment"`, `"Buy-Outright"`, `"Booth Rental"`, `"Donation"` but there is **no enum enforcing this and no web page reads or writes it** (`grep` for `consignmentType` across `web/src` returns nothing) — it's accepted by the intake API (`items.routes.ts`) and stored, but otherwise dark data today. Good place to preserve the source system's original per-item deal-type label even when it doesn't map cleanly onto Teabox's account-type model (e.g. an item under a "60-day markdown consignment" deal distinct from the account's default split). |
 | `status` | `String` | default `"AVAILABLE"`; must be one of `ITEM_STATUSES` | See §5 — **do not default ambiguous source statuses to `AVAILABLE`**; use `PENDING` and let staff triage. |
 | `intakeDate` | `DateTime` | default now | Preserve the original intake date from source data — this drives aging reports and default sort order (`orderBy: { intakeDate: "desc" }` throughout). |
 | `priceQuickSale` | `Float?` | optional, positive | Markdown/clearance price tier, if the source tracks one. |

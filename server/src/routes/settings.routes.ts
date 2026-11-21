@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { runAutoDonate } from "../services/expiry.service";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
@@ -34,7 +35,7 @@ settingsRouter.put("/profile", async (req, res) => {
 async function storeSettings(storeId: string) {
   const store = await prisma.store.findUniqueOrThrow({
     where: { id: storeId },
-    select: { name: true, location: true, itemPrefix: true, itemStartNumber: true },
+    select: { name: true, location: true, itemPrefix: true, itemStartNumber: true, autoDonate: true },
   });
   // Preview of what intake will assign next — same rule, outside a transaction.
   const next = await prisma.$transaction((tx) => nextItemIdentity(tx, storeId));
@@ -49,15 +50,27 @@ settingsRouter.get("/store", requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER"), as
 const storeSettingsSchema = z.object({
   itemPrefix: z.string().trim().toUpperCase().regex(ITEM_PREFIX_PATTERN, "Use 1–8 letters or digits"),
   itemStartNumber: z.number().int().positive(),
+  autoDonate: z.boolean().optional(), // expired consignments → DONATED automatically (services/expiry.service.ts)
 });
 settingsRouter.put("/store", requireRole("SYSTEM_ADMIN", "OWNER"), async (req, res) => {
   const parsed = storeSettingsSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const storeId = req.session!.storeId;
-  const before = await prisma.store.findUniqueOrThrow({ where: { id: storeId }, select: { itemPrefix: true, itemStartNumber: true } });
+  const before = await prisma.store.findUniqueOrThrow({
+    where: { id: storeId },
+    select: { itemPrefix: true, itemStartNumber: true, autoDonate: true },
+  });
+  const { autoDonate, ...numbering } = parsed.data;
   await prisma.store.update({ where: { id: storeId }, data: parsed.data });
-  await recordAudit(req.session!, "Store", storeId, "UPDATE_ITEM_NUMBERING", { before, after: parsed.data });
-  res.json(await storeSettings(storeId));
+  if (numbering.itemPrefix !== before.itemPrefix || numbering.itemStartNumber !== before.itemStartNumber) {
+    await recordAudit(req.session!, "Store", storeId, "UPDATE_ITEM_NUMBERING", { before, after: numbering });
+  }
+  let autoDonated = 0;
+  if (autoDonate !== undefined && autoDonate !== before.autoDonate) {
+    await recordAudit(req.session!, "Store", storeId, autoDonate ? "ENABLE_AUTO_DONATE" : "DISABLE_AUTO_DONATE", {});
+    if (autoDonate) autoDonated = await runAutoDonate(storeId); // catch up now, not at the next hourly run
+  }
+  res.json({ ...(await storeSettings(storeId)), autoDonated });
 });
 
 // ---- Users & Permissions (Owner/Admin only) ----

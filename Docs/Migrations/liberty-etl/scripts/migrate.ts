@@ -137,6 +137,7 @@ async function main() {
       name: config.store.name || libertyStore.STORE_NAME?.trim() || "Hidden Treasures",
       location: config.store.location || libertyStoreAddress || null,
       ...(config.items.prefix ? { itemPrefix: config.items.prefix } : {}),
+      ...(config.store.autoDonate != null ? { autoDonate: config.store.autoDonate } : {}),
       ...(itemStartNumber ? { itemStartNumber } : {}),
     },
   });

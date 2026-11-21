@@ -7,6 +7,7 @@ import { DayDetail } from "./reports/DayDetail";
 import { PrintQueues, type PrintQueueFilters } from "./reports/PrintQueues";
 import { PayoutsReport } from "./reports/PayoutsReport";
 import { ActiveItemsReport } from "./reports/ActiveItemsReport";
+import { YearEndInventory } from "./reports/YearEndInventory";
 import { todayKey } from "./reports/reportFormat";
 
 const TABS = [
@@ -14,6 +15,7 @@ const TABS = [
   { key: "day", label: "Day Detail" },
   { key: "payouts", label: "Payouts" },
   { key: "active", label: "Active Items" },
+  { key: "year-end", label: "Year-End Inventory" },
   { key: "sign-in", label: "Employee Sign-In Sheet" },
   { key: "barcode", label: "Barcode Generator" },
   { key: "print", label: "Print Queues" },
@@ -93,6 +95,7 @@ export function ReportsPage() {
       {tab === "day" && <DayDetail date={date} onDate={(d) => update({ date: d === todayKey() ? null : d })} />}
       {tab === "payouts" && <PayoutsReport />}
       {tab === "active" && <ActiveItemsReport />}
+      {tab === "year-end" && <YearEndInventory />}
       {tab === "sign-in" && <SignInSheet />}
       {tab === "barcode" && <BarcodeGenerator />}
       {tab === "print" && (

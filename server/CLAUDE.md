@@ -32,7 +32,7 @@ no shared package).
 - `UserRole` — `(userId, role, storeId, accountId?)`. One row per role a person holds; a user with both `MANAGER` and `CONSIGNOR` rows still only acts as one per session. `accountId` set for account-scoped roles (Consignor/Vendor/Donor/Booth Owner) — links the grant to the `Account` it acts on.
 - `Store` — one per shop. `itemPrefix`/`itemStartNumber` drive new item tags (see "Barcode values").
 - `Account` — polymorphic party items/payouts attach to: `accountType ∈ {CONSIGNOR, VENDOR, DONOR, BOOTH_OWNER, STORE, HOLDING}` (`HOLDING` = Lost & Found — see "Lost & Found" under Accounts). Every store has exactly one `STORE`-type account (store-owned inventory) so intake always has a target. `isStoreAccount` flags *additional* store-owned accounts (a shop's per-year "2019 Inventory" buckets, kept separate for their history) under an ordinary `CONSIGNOR`/`VENDOR`/`BOOTH_OWNER` type. **`isBalanceBearing()` (`src/services/accounts.service.ts`) is the one rule for "is this account owed money"** — balance-bearing type *and* not flagged; checkout credits, payouts, `serializeAccount()`'s balance stripping (Donor/Store/flagged — removed from the API response, not just hidden in the UI) and the dashboard's pending-payout total (`BALANCE_BEARING_WHERE`) all use it. Don't test `BALANCE_BEARING_ACCOUNT_TYPES` alone. `isActive` = dormant flag (see "Active flag" under Accounts). `lastSaleAt` is denormalized (see Accounts). `accountNumber` (`@@unique([storeId, accountNumber])`) is the number staff know an account by and `nextItemNumber` its item-tag counter — see "Account and tag numbers". `mailingAddress` (free text, like `Store.location`) and `paymentMethod` have **no current write path** — populated only by direct SQL (e.g. a migration), not reachable via any route or UI today.
-- `Item` — `accountId` is **required** (no intake without an account). `status ∈ {PENDING, AVAILABLE, SOLD, DONATED, DISPOSED, RETURNED}`. `cost` (acquisition cost basis) has **no current write path**, same as `consignmentType`. `sku` is also the barcode value (see below) — POS scan lookup, the printed tag, and the web `Barcode` component all key off it. `itemNumber` (`@@unique([storeId, itemNumber])`) is the number encoded in `sku` — see "Barcode values" for the invariant. `tagAccountNumber`/`accountItemNumber` are the human item number "4545-12" — see "Account and tag numbers". `soldAt`/`paidOutAt` are denormalized latest sale/payout dates for list sorting (see "Item lists"). `claimedAt` = when the item was claimed off a Lost & Found account (see Accounts).
+- `Item` — `accountId` is **required** (no intake without an account). `status ∈ {PENDING, AVAILABLE, SOLD, DONATED, DISPOSED, RETURNED}`. `consignmentType` = how the store got a store-owned item (`CONSIGNMENT_TYPES`: Buy-Outright, Trade, Walk-in Donation, Expired Consignment; null = consigned) and `cost` its cost basis — set at intake (store-owned accounts only) or by a Manager+ edit; see "Consignment expiry, flips and acquisition". `donatedAt` / `flippedAt` stamp donation and flip-to-store. `sku` is also the barcode value (see below) — POS scan lookup, the printed tag, and the web `Barcode` component all key off it. `itemNumber` (`@@unique([storeId, itemNumber])`) is the number encoded in `sku` — see "Barcode values" for the invariant. `tagAccountNumber`/`accountItemNumber` are the human item number "4545-12" — see "Account and tag numbers". `soldAt`/`paidOutAt` are denormalized latest sale/payout dates for list sorting (see "Item lists"). `claimedAt` = when the item was claimed off a Lost & Found account (see Accounts).
 - `ItemHistory`, `Photo`, `Sale`, `Device`, `Heartbeat` — as named.
 - `Payout` — `payoutNumber` is the human-facing "Payout #" (migrated payouts keep the source system's number; new ones `nextPayoutNumber()`).
 - `PayoutLine` — itemization of a `Payout`; a `Sale` with a line counts as paid out. See "Accounts" below.
@@ -344,6 +344,35 @@ Raw queries number their params (`?1` = now, `?2` = storeId); aggregates go thro
 
 Labels: `AUDIT_LABELS` in `lib/enums.ts`. Everything is Manager+ except apply.
 
+## Consignment expiry, flips and acquisition (`src/services/expiry.service.ts`, 2026-11-08)
+
+Hidden Treasures' policy (owner, 2026-11-08): almost nobody collects unsold items, so a
+consignment unsold after `CONSIGNMENT_DAYS` (90, `lib/enums.ts`) is **donated**; now and
+then a nice overlooked one is kept as store inventory instead (a **flip**).
+
+- `Store.autoDonate` (Settings > Store, Owner/Admin; audited `ENABLE_`/`DISABLE_AUTO_DONATE`;
+  turning it on runs the job at once and the PUT returns `autoDonated`). `runAutoDonate()`
+  marks every `expiredConsignmentWhere()` item `DONATED` + `donatedAt`: AVAILABLE/PENDING,
+  on a `CONSIGNOR` account (not flagged store, not Vendor/Booth Owner/Holding), past 90
+  days, with an effective split > 0. **Ignores `donateIfUnsold`** — store policy overrides
+  the consignor's old flag. History entries have `changedById` null and
+  `activeRole: "SYSTEM"`; one `AUTO_DONATE` audit row per run. `startAutoDonateTimer()`
+  (`index.ts`) runs it 5s after start, then hourly — an install isn't always running.
+- `flipToStore()` / `POST /items/:id/flip-to-store` (staff **and Register**): a DONATED
+  item, or an expired consignment still on the floor (`flipReason()`, also returned as
+  `flippable` by `GET /items/:id`), goes back to AVAILABLE on the built-in `STORE`
+  account with `consignmentType: "Expired Consignment"` and `flippedAt` (the store's
+  acquisition date for the year-end count); tag number unchanged; audited
+  `FLIP_TO_STORE`. Inventory Audit's Expired → Store apply sets the same fields.
+- POS `/lookup` answers **409 `{ donated }`** when the code matches a DONATED item (not
+  404), so the register can offer the flip — auto-donation marks items nobody pulled.
+- Intake accepts `consignmentType` (`INTAKE_CONSIGNMENT_TYPES`) and `cost` only for
+  store-owned accounts (400 otherwise); `PATCH /items/:id` edits both (Manager+, allowed
+  on sold items). Every path that sets `DONATED` stamps `donatedAt` (and leaving it clears
+  it). Audit dimension `acquired` breaks the active set down by it.
+- liberty-etl `sync` treats items with `donatedAt`/`flippedAt`/`claimedAt` as Teabox-edited,
+  so Liberty (still saying Available) can't undo an automatic donation or a flip.
+
 ## Item edit / delete (`src/routes/items.routes.ts`)
 
 `PATCH /items/:id` (staff) edits any subset of an item's fields and records each change
@@ -407,6 +436,19 @@ SQLite DateTimes as integer epoch ms). Manager/Owner/Admin only.
   balance). Dates are local day keys on `createdAt`. Store scoping is `accountId IN
   (store's accounts)`, not `account: { storeId }` (~230ms over 55k payouts), and item
   counts are one `groupBy` for the page (a filtered relation `_count` took ~900ms).
+- **Year-End Inventory** (`services/yearEndInventory.service.ts`, 2026-11-08, Manager+) —
+  `GET /year-end-inventory?date=YYYY-MM-DD&years=3` (summary: totals, by acquisition year,
+  by acquisition type), `/year-end-inventory/items` (paged) and `/year-end-inventory/export.csv`.
+  Hidden Treasures reports the last 3 years' unsold store inventory to the IRS each year.
+  Counts store-owned items (built-in STORE or flagged store accounts) whose acquisition date
+  (`flippedAt ?? intakeDate`) falls in the `years` before the end of `date` (default last
+  Dec 31) and that were still here then: AVAILABLE/PENDING, or sold/donated after it
+  (`soldAt`/`donatedAt`). DISPOSED/RETURNED have no date → only counted as `undated`.
+  Values are *current* tag prices plus recorded cost; "with a cost" means cost > 0, since
+  Liberty stored 0 for "not entered" (the CSV blanks those, except walk-in donations).
+- Payout statements (`payoutStatement()`) list payouts **newest first** (owner request
+  2026-11-08) — the on-screen statement and the Statement PDF both take that order; lines
+  inside a payout stay chronological.
 - **Active Items** — `GET /active-items?accountId=&q=&category=&status=&sort=&dir=&page=&pageSize`
   (up to 50,000 for the PDF): the Inventory Audit's active set and split rule
   (`auditItems` + `activeTotals`). With an account filter, `where()` writes `+i."storeId"`

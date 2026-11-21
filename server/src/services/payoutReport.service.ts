@@ -134,7 +134,9 @@ export async function payoutStatement(storeId: string, query: z.infer<typeof sta
   const payouts = await prisma.payout.findMany({
     // Voided (REJECTED) payouts paid nothing, so they don't belong on a statement.
     where: { accountId: account.id, status: { not: "REJECTED" }, ...(created ? { createdAt: created } : {}) },
-    orderBy: [{ createdAt: "asc" }, { payoutNumber: "asc" }],
+    // Newest first (owner feedback, 2026-11-08): the latest payouts lead the statement —
+    // on screen and in the Statement PDF alike. Lines within a payout stay chronological.
+    orderBy: [{ createdAt: "desc" }, { payoutNumber: "desc" }],
     select: {
       id: true,
       payoutNumber: true,

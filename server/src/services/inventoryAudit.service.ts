@@ -2,7 +2,7 @@ import { prisma } from "../lib/prisma";
 import { parseTagNumber } from "../lib/barcode";
 import type { SessionClaims } from "../lib/jwt";
 import { recordAudit, recordAuditMany } from "../lib/audit";
-import { AUDIT_LABELS, type AuditLabel } from "../lib/enums";
+import { AUDIT_LABELS, CONSIGNMENT_DAYS, type AuditLabel } from "../lib/enums";
 
 // Inventory Audit (/audit): an explorer over the store's *active* items (AVAILABLE or
 // PENDING) for working out what's really on the floor, who it belongs to and what it's
@@ -15,7 +15,7 @@ import { AUDIT_LABELS, type AuditLabel } from "../lib/enums";
 
 // Consignment period: a consigned item unsold this long is "expired" (Hidden Treasures:
 // 90 days, then the store's — confirmed with the user 2026-10-12).
-export const CONSIGNMENT_DAYS = 90;
+export { CONSIGNMENT_DAYS }; // defined in lib/enums.ts (shared with the expiry job)
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 // Effective consignor share: the item's own split (migrated Liberty items), else the
@@ -43,6 +43,13 @@ export const DIMENSIONS = {
                WHEN ${PCT} = 0 THEN 'consigned-0'
                ELSE 'consigned' END`,
     order: ["consigned", "consigned-0", "holding", "store-account", "store"],
+  },
+  acquired: {
+    label: "Acquired",
+    sql: `CASE i."consignmentType" WHEN 'Buy-Outright' THEN 'purchased' WHEN 'Trade' THEN 'trade'
+               WHEN 'Walk-in Donation' THEN 'walk-in' WHEN 'Expired Consignment' THEN 'flipped'
+               ELSE CASE WHEN ${STORE_OWNED} THEN 'store-unknown' ELSE 'consigned' END END`,
+    order: ["consigned", "purchased", "trade", "walk-in", "flipped", "store-unknown"],
   },
   expired: {
     label: "Consignment",
@@ -307,8 +314,9 @@ export async function applyLabel(session: SessionClaims, label: AuditLabel) {
       prisma.item.updateMany({
         where: { id: { in: ids } },
         data: storeAccount
-          ? { accountId: storeAccount.id, auditAppliedAt: now }
-          : { status: APPLY_STATUS[label]!, auditAppliedAt: now },
+          ? // a flip, same as services/expiry.service.ts flipToStore
+            { accountId: storeAccount.id, auditAppliedAt: now, consignmentType: "Expired Consignment", flippedAt: now }
+          : { status: APPLY_STATUS[label]!, auditAppliedAt: now, ...(label === "DONATE" ? { donatedAt: now } : {}) },
       }),
       prisma.itemHistory.createMany({
         data: batch.map((b) =>

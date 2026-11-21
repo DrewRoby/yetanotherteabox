@@ -103,6 +103,17 @@ Treasures cutover. Details live in `server/CLAUDE.md` / `web/CLAUDE.md`:
   claimed" on the account page; bulk "release to the store" by sale date). Liberty's
   lost & found (client 101550, account 2834) converted in the dev DB — its $2,892.48
   "balance" became derived unclaimed sales (pre-change copy in `dist-bin/arch/`).
+  Then **consignment expiry**: with Settings > Store > "Donate automatically after 90
+  days" on, Teabox marks unsold consignments DONATED itself (hourly; ignores the old
+  donate-if-unsold flag, per Sherry), and any donated or expired item can be **flipped
+  to store inventory** — from its item page, or at the register when scanned (it was
+  still on the floor). Store-owned intake records **how the store got it** (walk-in
+  donation / purchase / trade, + cost); flips record "Expired Consignment" and a flip
+  date. On in the dev DB: 4,579 expired consignments donated (copy before in
+  `dist-bin/arch/teabox-arch20261108b-pre-autodonate.db`).
+  Then Reports > **Year-End Inventory** (store-owned items from the last 3 years still on
+  hand at a date, default last Dec 31 — what Sherry reports to the IRS; Summary PDF + item
+  CSV), and payout statements now list the **newest payout first** (screen and PDF).
 - **v0.2.1** (2026-11-07) — the owner's first round of feedback on 0.2.0, in two parts.
   **Round 1**: sans-serif numerals app-wide, account
   numbers (Liberty's `CLIENT.ACCOUNT`) as a column and in the account header ("Abby
@@ -150,12 +161,18 @@ records.
 migrated items overall) have no `<account#>-<item#>` — store-owned stock that Liberty no
 longer links to any account (no `CLIENT_ITEM` row, no ledger credit). Teabox shows their
 `LIB-` SKU instead. Ask what Liberty prints/shows for one of them (e.g. search Teabox
-Inventory Audit for store-owned items with no tag number). Also: which account should
-the shop's own new stock be entered under — Teabox's built-in "Store-Owned Inventory"
-(numbered 4546, after Liberty's last client) or Liberty's own store account(s), e.g.
-1 "Shopper SAM HT STORE" / the 800xx "Hidden Treasures 20XX" buckets? While Liberty is
+Inventory Audit for store-owned items with no tag number). Also (decided 2026-11-08: new store stock, walk-in donations and flips go to the built-in
+"Store-Owned Inventory", 4546, each item recording how/when the store got it — the
+800xx year buckets stay for Liberty-era history). While Liberty is
 still in use, each new Liberty client takes the next number, so `npm run sync` will bump
 the built-in store account's number (reported as a conflict) until cutover.
+
+**Unclaimed consignor balances (2026-11-08):** when a consignor is confirmed never coming
+back (e.g. deceased), Sherry zeroes the account with an offsetting entry rather than a
+payout. Teabox has no such path yet — balances only change through checkout, Lost & Found
+claims and payouts — so a "forfeit balance" adjustment (audited, reason required,
+excluded from payout totals) is still to build. ~$14.6k sits on ~900 accounts with no
+sale in 2+ years. Worth checking Missouri unclaimed-property rules before building.
 
 **Also ask Sherry (2026-11-08, store "inventory" accounts):** analysis in
 `Docs/Migrations/liberty-etl/reports/store_inventory_accounts_analysis.md` — the 800xx

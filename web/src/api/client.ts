@@ -12,9 +12,11 @@ export function clearToken() {
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  body: unknown; // the parsed response, for errors that carry more than a message (e.g. POS lookup's donated item)
+  constructor(status: number, message: string, body?: unknown) {
     super(message);
     this.status = status;
+    this.body = body;
   }
 }
 
@@ -31,7 +33,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   if (!res.ok) {
     const message = typeof body === "object" && body?.error ? JSON.stringify(body.error) : String(body);
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, message, body);
   }
   return body as T;
 }

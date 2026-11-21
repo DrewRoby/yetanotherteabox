@@ -4,12 +4,13 @@ import { prisma } from "../lib/prisma";
 import { authenticate } from "../middleware/auth";
 import { requireRole } from "../middleware/requireRole";
 import { recordAudit } from "../lib/audit";
-import { ITEM_STATUSES } from "../lib/enums";
+import { CONSIGNMENT_TYPES, INTAKE_CONSIGNMENT_TYPES, ITEM_STATUSES } from "../lib/enums";
 import { IntakeAccountError, nextItemIdentity, resolveIntakeAccountId } from "../services/items.service";
 import { itemListQuerySchema, listCategories, listItems } from "../services/itemList.service";
 import { loadPrintableItems, printItemsAsJob } from "../services/printJobs.service";
 import { suggestMetadata } from "../adapters/cv";
 import { parseTagNumber } from "../lib/barcode";
+import { FlipError, flipReason, flipToStore } from "../services/expiry.service";
 
 export const itemsRouter = Router();
 itemsRouter.use(authenticate);
@@ -77,7 +78,8 @@ itemsRouter.get("/:id", async (req, res) => {
   if (!isStaff && !ownsItem) {
     return res.status(403).json({ error: "Not authorized to view this item" });
   }
-  res.json(item);
+  // flippable: why the item page may offer "Flip to store inventory" (null = it can't).
+  res.json({ ...item, flippable: flipReason(item) });
 });
 
 const intakeSchema = z.object({
@@ -90,7 +92,9 @@ const intakeSchema = z.object({
   size: z.string().optional(),
   serialNumber: z.string().optional(),
   condition: z.string().optional(),
-  consignmentType: z.string().optional(),
+  // How the store got it — store-owned accounts only (lib/enums.ts CONSIGNMENT_TYPES).
+  consignmentType: z.enum(INTAKE_CONSIGNMENT_TYPES as [string, ...string[]]).optional(),
+  cost: z.number().min(0).optional(), // what the store paid, for purchases/trades
   priceQuickSale: z.number().positive().optional(),
   price: z.number().positive(),
   pricePremium: z.number().positive().optional(),
@@ -115,6 +119,12 @@ itemsRouter.post("/", async (req, res) => {
     if (err instanceof IntakeAccountError) return res.status(400).json({ error: err.message });
     throw err;
   }
+  if (parsed.data.consignmentType || parsed.data.cost != null) {
+    const target = await prisma.account.findUniqueOrThrow({ where: { id: accountId }, select: { accountType: true, isStoreAccount: true } });
+    if (target.accountType !== "STORE" && !target.isStoreAccount) {
+      return res.status(400).json({ error: "How the store got an item (and its cost) only applies to store-owned stock" });
+    }
+  }
 
   // itemNumber + sku are assigned inside the same transaction as the create so two
   // concurrent intakes for this store can't compute the same number (see
@@ -138,6 +148,7 @@ itemsRouter.post("/", async (req, res) => {
         serialNumber: parsed.data.serialNumber,
         condition: parsed.data.condition,
         consignmentType: parsed.data.consignmentType,
+        cost: parsed.data.cost,
         priceQuickSale: parsed.data.priceQuickSale,
         price: parsed.data.price,
         pricePremium: parsed.data.pricePremium,
@@ -253,6 +264,7 @@ itemsRouter.put(
       where: { id: item.id },
       data: {
         status: parsed.data.status,
+        ...(parsed.data.status !== item.status ? { donatedAt: parsed.data.status === "DONATED" ? new Date() : null } : {}),
         history: {
           create: [
             {
@@ -268,6 +280,23 @@ itemsRouter.put(
     });
     await recordAudit(req.session!, "Item", item.id, "STATUS_CHANGE", { from: item.status, to: parsed.data.status });
     res.json(updated);
+  }
+);
+
+// Flip to store inventory (services/expiry.service.ts): a donated item that's still
+// here, or an expired consignment, becomes the store's and goes back on the floor.
+// Register sessions too — the till offers it when a donated item is scanned.
+itemsRouter.post(
+  "/:id/flip-to-store",
+  requireRole("SYSTEM_ADMIN", "OWNER", "MANAGER", "EMPLOYEE", "REGISTER"),
+  async (req, res) => {
+    try {
+      res.json(await flipToStore(req.session!, req.params.id));
+    } catch (err) {
+      if (err instanceof FlipError) return res.status(err.status).json({ error: err.message });
+      console.error("flip failed", err);
+      res.status(500).json({ error: "Couldn't flip the item — nothing was changed" });
+    }
   }
 );
 
@@ -299,6 +328,8 @@ const itemEditSchema = z
     pricePremium: z.number().positive().nullable().optional(),
     status: z.enum(EDITABLE_STATUSES).optional(),
     accountId: z.string().min(1).optional(),
+    consignmentType: z.enum(CONSIGNMENT_TYPES as unknown as [string, ...string[]]).nullable().optional(),
+    cost: z.number().min(0).nullable().optional(),
   })
   .strict();
 
@@ -323,9 +354,15 @@ itemsRouter.patch("/:id", requireRole(...STAFF_ROLES), async (req, res) => {
   );
   const accountChanged = input.accountId !== undefined && input.accountId !== item.accountId;
   const statusChanged = input.status !== undefined && input.status !== item.status;
+  const acquisitionFields = (["consignmentType", "cost"] as const).filter(
+    (f) => input[f] !== undefined && input[f] !== item[f]
+  );
 
-  if ((priceFields.length || accountChanged) && !(PRICE_AND_ACCOUNT_ROLES as readonly string[]).includes(session.activeRole)) {
-    return res.status(403).json({ error: "Only a Manager, Owner or Admin can change an item's price or account" });
+  if (
+    (priceFields.length || accountChanged || acquisitionFields.length) &&
+    !(PRICE_AND_ACCOUNT_ROLES as readonly string[]).includes(session.activeRole)
+  ) {
+    return res.status(403).json({ error: "Only a Manager, Owner or Admin can change an item's price, account, acquisition or cost" });
   }
   if (item.status === "SOLD" && (priceFields.length || accountChanged || statusChanged)) {
     return res.status(409).json({
@@ -360,6 +397,18 @@ itemsRouter.patch("/:id", requireRole(...STAFF_ROLES), async (req, res) => {
   if (statusChanged) {
     data.status = input.status;
     before.status = item.status;
+    data.donatedAt = input.status === "DONATED" ? new Date() : null;
+  }
+  // Acquisition is descriptive (how the store got it, what it paid) — editable even
+  // once sold, like the other descriptive fields.
+  for (const f of acquisitionFields) {
+    data[f] = input[f];
+    before[f] = item[f];
+    editNotes.push(
+      f === "cost"
+        ? `cost: ${money(item.cost)} → ${money(input.cost)}`
+        : `acquired: ${item.consignmentType ?? "—"} → ${input.consignmentType ?? "—"}`
+    );
   }
   if (accountChanged) {
     data.accountId = input.accountId;

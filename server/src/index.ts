@@ -10,6 +10,7 @@ import fs from "fs";
 import { exec } from "child_process";
 import { setupRouter } from "./routes/setup.routes";
 import { maybeAutoCompleteSetup } from "./services/setup.service";
+import { startAutoDonateTimer } from "./services/expiry.service";
 import { authRouter } from "./routes/auth.routes";
 import { accountsRouter } from "./routes/accounts.routes";
 import { itemsRouter } from "./routes/items.routes";
@@ -92,6 +93,7 @@ async function start() {
   const server = app.listen(port, host, () => {
     const url = `http://localhost:${port}`;
     console.log(`Teabox listening on ${url}`);
+    startAutoDonateTimer(); // expired consignments → DONATED, for stores with autoDonate on
     if (host !== "127.0.0.1" && host !== "localhost") {
       console.warn(
         `\nWARNING: bound to ${host}, reachable from other devices on the network over plain HTTP.\n` +

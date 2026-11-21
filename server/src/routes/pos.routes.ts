@@ -20,7 +20,19 @@ posRouter.get("/lookup", async (req, res) => {
     where: { storeId: req.session!.storeId, status: "AVAILABLE", ...(tag ?? { sku: code }) },
     include: { account: { select: { name: true } } },
   });
-  if (!item) return res.status(404).json({ error: "No available item with that tag number or SKU" });
+  if (!item) {
+    // A donated item scanned at the till is still on the floor (auto-donation marks
+    // expired consignments without anyone pulling them): offer to flip it to store
+    // inventory and sell it (POST /items/:id/flip-to-store), rather than "not found".
+    const donated = await prisma.item.findFirst({
+      where: { storeId: req.session!.storeId, status: "DONATED", ...(tag ?? { sku: code }) },
+      include: { account: { select: { name: true } } },
+    });
+    if (donated) {
+      return res.status(409).json({ error: "This item was marked donated", donated });
+    }
+    return res.status(404).json({ error: "No available item with that tag number or SKU" });
+  }
   res.json(item);
 });
 
